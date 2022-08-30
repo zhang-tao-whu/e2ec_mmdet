@@ -30,27 +30,45 @@ except ImportError:
 @PIPELINES.register_module()
 class AlignSampleBoundary:
     def __init__(self,
-                 point_nums=128):
+                 point_nums=128,
+                 reset_bbox=True):
         self.point_nums = point_nums
+        self.reset_bbox = reset_bbox
         self.d = Douglas()
 
     def __call__(self, results):
         gt_masks = results['gt_masks']
+        gt_labels = results['gt_labels']
         gt_polys = gt_masks.masks
         height, width = gt_masks.height, gt_masks.width
         sampled_polys, keyPointsMask, key_points_list = [], [], []
-        for gt_poly in gt_polys:
+        if self.reset_bbox:
+            reset_bboxes = []
+            reset_labels = []
+
+        for gt_poly, label in zip(gt_polys, gt_labels):
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
+                if self.reset_bbox:
+                    reset_labels.append(label)
+                    bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
+                    reset_bboxes.append(bbox)
                 self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
+
         if len(sampled_polys) != 0:
             results['gt_polys'] = np.stack(sampled_polys, axis=0)
             results['key_points_masks'] = np.stack(keyPointsMask, axis=0)
             results['key_points'] = np.stack(key_points_list, axis=0)
+            if self.reset_bbox:
+                results['gt_labels'] = np.stack(reset_labels, axis=0)
+                results['gt_bboxes'] = np.stack(reset_bboxes, axis=0)
         else:
             results['gt_polys'] = np.zeros((0, 128, 2), dtype=np.float32)
             results['key_points_masks'] = np.zeros((0, 128, ), dtype=np.int64)
             results['key_points'] = np.zeros((0, 128, 2), dtype=np.float32)
+            if self.reset_bbox:
+                results['gt_labels'] = np.zeros((0, ), dtype=np.int64)
+                results['gt_bboxes'] = np.zeros((0, 4), dtype=np.float32)
         return results
 
     def ignore_poly(self, idxs):
