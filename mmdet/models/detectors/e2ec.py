@@ -5,7 +5,7 @@ import warnings
 
 import torch
 
-from mmdet.core import bbox2result
+from mmdet.core import bbox2result, multi_apply
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
 import pycocotools.mask as maskUtils
 
@@ -74,9 +74,10 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
                                               gt_labels, gt_bboxes_ignore)
-        contour_proposals, losses_contour_proposal = self.contour_proposal_head.forward_train(x, img_metas,
+        contour_proposals, losses_contour_proposal, inds = self.contour_proposal_head.forward_train(x, img_metas,
                                                                                               gt_bboxes, gt_contours)
-        losses_contour_evolve = self.contour_evolve_head.forward_train(x, img_metas, contour_proposals, gt_contours)
+        losses_contour_evolve = self.contour_evolve_head.forward_train(x, img_metas, contour_proposals,
+                                                                       gt_contours, inds)
         losses.update(losses_contour_proposal)
         losses.update(losses_contour_evolve)
         return losses
@@ -107,15 +108,13 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         ]
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
-        contour_proposals = self.contour_proposal_head.forward_test(feat, img_metas, bboxes_pred)
-        contours_pred = self.contour_evolve_head.forward_test(feat, img_metas, contour_proposals)
+        contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
+        contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
         img_shape = img_metas[0]['batch_input_shape']
-        return bbox_results, self.convert_contour2mask(contours_pred, labels_pred, img_shape)
+        mask_results = self.convert_contour2mask(contours_pred, labels_pred, img_shape)
+        return list(zip(bbox_results, mask_results))
 
-    def convert_contour2mask(self, contours_pred, labels_pred, img_shape):
-        #masks_pred [single img masks_pred]
-        #single img masks_pred [single class instances mask]
-        #instance mask (h, w)
+    def single_convert_contour2mask(self, contours_pred, labels_pred, img_shape):
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred = labels_pred.detach().cpu().numpy()
@@ -127,8 +126,14 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         masks = maskUtils.decode(rles).transpose(2, 0, 1)
         for mask, label in zip(masks, labels_pred):
             mask_pred[int(label)].append(mask)
-        masks_pred = None
-        return masks_pred
+        return mask_pred
+
+    def convert_contour2mask(self, contours_preds, labels_preds, img_shape):
+        #masks_pred [single img masks_pred]
+        #single img masks_pred [single class instances mask]
+        #instance mask (h, w)
+        return multi_apply(self.single_convert_contour2mask,
+                           contours_preds, labels_preds, img_shape=img_shape)
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     """Test function with test time augmentation.

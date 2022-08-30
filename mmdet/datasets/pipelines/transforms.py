@@ -9,10 +9,11 @@ import mmcv
 import numpy as np
 from numpy import random
 
-from mmdet.core import BitmapMasks, PolygonMasks, find_inside_bboxes
+from mmdet.core import PolygonMasks, find_inside_bboxes
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
 from mmdet.utils import log_img_scale
 from ..builder import PIPELINES
+from shapely.geometry import Polygon
 
 try:
     from imagecorruptions import corrupt
@@ -25,6 +26,211 @@ try:
 except ImportError:
     albumentations = None
     Compose = None
+
+@PIPELINES.register_module()
+class AlignSampleBoundary:
+    def __init__(self,
+                 point_nums=128):
+        self.point_nums = point_nums
+        self.d = Douglas()
+
+    def __call__(self, results):
+        gt_masks = results['gt_masks']
+        gt_polys = gt_masks.masks
+        height, width = gt_masks.height, gt_masks.width
+        sampled_polys, keyPointsMask, key_points_list = [], [], []
+        for gt_poly in gt_polys:
+            for comp_poly in gt_poly:
+                poly = comp_poly.reshape(-1, 2).astype(np.float32)
+                self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
+        if len(sampled_polys) != 0:
+            results['gt_polys'] = np.stack(sampled_polys, axis=0)
+            results['key_points_masks'] = np.stack(keyPointsMask, axis=0)
+            results['key_points'] = np.stack(key_points_list, axis=0)
+        else:
+            results['gt_polys'] = np.zeros((0, 128, 2), dtype=np.float32)
+            results['key_points_masks'] = np.zeros((0, 128, ), dtype=np.int64)
+            results['key_points'] = np.zeros((0, 128, 2), dtype=np.float32)
+        return results
+
+    def ignore_poly(self, idxs):
+        idxs = np.array(idxs)
+        max_idx = np.argmax(idxs)
+        idxs = np.roll(idxs, -max_idx - 1)
+        ret = idxs[1] > idxs[0] and idxs[2] > idxs[1] and idxs[3] > idxs[2]
+        return not ret
+
+    def unique(self, poly):
+        poly_ = np.roll(poly, 1)
+        dis = np.sum((poly - poly_) ** 2, axis=1) ** 0.5
+        valid = dis >= 0.1
+        return poly[valid]
+
+    def prepare_evolution(self, poly, img_gt_polys, keyPointsMask, key_points_list):
+        poly = self.unique(poly)
+        poly = self.get_cw_polys(poly)
+        ori_nodes = len(poly)
+        key_points = poly
+        img_gt_poly = self.uniformsample(poly, ori_nodes * self.point_nums)
+        idx = self.four_idx(img_gt_poly)
+        if self.ignore_poly(idx):
+            return 
+        img_gt_poly = self.get_img_gt(img_gt_poly, idx, t=self.point_nums)
+        key_mask = self.get_keypoints_mask(key_points)
+        key_points = key_points[key_mask.astype(np.bool)]
+        if len(key_points) >= self.point_nums:
+            key_points = key_points[:self.point_nums]
+            key_mask = np.ones((self.point_nums, ), dtype=np.int64)
+        else:
+            temp = np.zeros((self.point_nums, 2), dtype=np.float32)
+            temp[:len(key_points)] = key_points
+            key_mask = np.zeros((self.point_nums,), dtype=np.int64)
+            key_mask[:len(key_points)] = 1
+            key_points = temp
+        keyPointsMask.append(key_mask)
+        img_gt_polys.append(img_gt_poly)
+        key_points_list.append(key_points)
+        return
+
+    def get_cw_polys(self, poly):
+        return poly[::-1] if Polygon(poly).exterior.is_ccw else poly
+
+    @staticmethod
+    def uniformsample(pgtnp_px2, newpnum):
+        pnum, cnum = pgtnp_px2.shape
+        assert cnum == 2
+
+        idxnext_p = (np.arange(pnum, dtype=np.int32) + 1) % pnum
+        pgtnext_px2 = pgtnp_px2[idxnext_p]
+        edgelen_p = np.sqrt(np.sum((pgtnext_px2 - pgtnp_px2) ** 2, axis=1))
+        edgeidxsort_p = np.argsort(edgelen_p)
+
+        # two cases
+        # we need to remove gt points
+        # we simply remove shortest paths
+        if pnum > newpnum:
+            edgeidxkeep_k = edgeidxsort_p[pnum - newpnum:]
+            edgeidxsort_k = np.sort(edgeidxkeep_k)
+            pgtnp_kx2 = pgtnp_px2[edgeidxsort_k]
+            assert pgtnp_kx2.shape[0] == newpnum
+            return pgtnp_kx2
+        # we need to add gt points
+        # we simply add it uniformly
+        else:
+            edgenum = np.round(edgelen_p * newpnum / np.sum(edgelen_p)).astype(np.int32)
+            for i in range(pnum):
+                if edgenum[i] == 0:
+                    edgenum[i] = 1
+
+            # after round, it may has 1 or 2 mismatch
+            edgenumsum = np.sum(edgenum)
+            if edgenumsum != newpnum:
+
+                if edgenumsum > newpnum:
+
+                    id = -1
+                    passnum = edgenumsum - newpnum
+                    while passnum > 0:
+                        edgeid = edgeidxsort_p[id]
+                        if edgenum[edgeid] > passnum:
+                            edgenum[edgeid] -= passnum
+                            passnum -= passnum
+                        else:
+                            passnum -= edgenum[edgeid] - 1
+                            edgenum[edgeid] -= edgenum[edgeid] - 1
+                            id -= 1
+                else:
+                    id = -1
+                    edgeid = edgeidxsort_p[id]
+                    edgenum[edgeid] += newpnum - edgenumsum
+
+            assert np.sum(edgenum) == newpnum
+
+            psample = []
+            for i in range(pnum):
+                pb_1x2 = pgtnp_px2[i:i + 1]
+                pe_1x2 = pgtnext_px2[i:i + 1]
+
+                pnewnum = edgenum[i]
+                wnp_kx1 = np.arange(edgenum[i], dtype=np.float32).reshape(-1, 1) / edgenum[i]
+
+                pmids = pb_1x2 * (1 - wnp_kx1) + pe_1x2 * wnp_kx1
+                psample.append(pmids)
+
+            psamplenp = np.concatenate(psample, axis=0)
+            return psamplenp
+
+    @staticmethod
+    def four_idx(img_gt_poly):
+        x_min, y_min = np.min(img_gt_poly, axis=0)
+        x_max, y_max = np.max(img_gt_poly, axis=0)
+        center = [(x_min + x_max) / 2., (y_min + y_max) / 2.]
+        can_gt_polys = img_gt_poly.copy()
+        can_gt_polys[:, 0] -= center[0]
+        can_gt_polys[:, 1] -= center[1]
+        distance = np.sum(can_gt_polys ** 2, axis=1, keepdims=True) ** 0.5 + 1e-6
+        can_gt_polys /= np.repeat(distance, axis=1, repeats=2)
+        idx_bottom = np.argmax(can_gt_polys[:, 1])
+        idx_top = np.argmin(can_gt_polys[:, 1])
+        idx_right = np.argmax(can_gt_polys[:, 0])
+        idx_left = np.argmin(can_gt_polys[:, 0])
+        return [idx_bottom, idx_right, idx_top, idx_left]
+
+    @staticmethod
+    def get_img_gt(img_gt_poly, idx, t=128):
+        align = len(idx)
+        pointsNum = img_gt_poly.shape[0]
+        r = []
+        k = np.arange(0, t / align, dtype=float) / (t / align)
+        for i in range(align):
+            begin = idx[i]
+            end = idx[(i + 1) % align]
+            if begin > end:
+                end += pointsNum
+            r.append((np.round(((end - begin) * k).astype(int)) + begin) % pointsNum)
+        r = np.concatenate(r, axis=0)
+        return img_gt_poly[r, :]
+
+    def get_keypoints_mask(self, img_gt_poly):
+        key_mask = self.d.sample(img_gt_poly)
+        return key_mask
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(poly_nums={self.point_nums}, '
+        return repr_str
+
+class Douglas:
+    D = 1
+    def sample(self, poly):
+        mask = np.zeros((poly.shape[0],), dtype=int)
+        mask[0] = 1
+        endPoint = poly[0: 1, :] + poly[-1:, :]
+        endPoint /= 2
+        poly_append = np.concatenate([poly, endPoint], axis=0)
+        self.compress(0, poly.shape[0], poly_append, mask)
+        return mask
+
+    def compress(self, idx1, idx2, poly, mask):
+        p1 = poly[idx1, :]
+        p2 = poly[idx2, :]
+        A = (p1[1] - p2[1])
+        B = (p2[0] - p1[0])
+        C = (p1[0] * p2[1] - p2[0] * p1[1])
+
+        m = idx1
+        n = idx2
+        if (n == m + 1):
+            return
+        d = abs(A * poly[m + 1: n, 0] + B * poly[m + 1: n, 1] + C) / math.sqrt(math.pow(A, 2) + math.pow(B, 2) + 1e-4)
+        max_idx = np.argmax(d)
+        dmax = d[max_idx]
+        max_idx = max_idx + m + 1
+
+        if dmax > self.D:
+            mask[max_idx] = 1
+            self.compress(idx1, max_idx, poly, mask)
+            self.compress(max_idx, idx2, poly, mask)
 
 
 @PIPELINES.register_module()
@@ -62,9 +268,6 @@ class Resize:
         backend (str): Image resize backend, choices are 'cv2' and 'pillow'.
             These two backends generates slightly different results. Defaults
             to 'cv2'.
-        interpolation (str): Interpolation method, accepted values are
-            "nearest", "bilinear", "bicubic", "area", "lanczos" for 'cv2'
-            backend, "nearest", "bilinear" for 'pillow' backend.
         override (bool, optional): Whether to override `scale` and
             `scale_factor` so as to call resize twice. Default False. If True,
             after the first resizing, the existed `scale` and `scale_factor`
@@ -80,7 +283,6 @@ class Resize:
                  keep_ratio=True,
                  bbox_clip_border=True,
                  backend='cv2',
-                 interpolation='bilinear',
                  override=False):
         if img_scale is None:
             self.img_scale = None
@@ -103,7 +305,6 @@ class Resize:
         self.ratio_range = ratio_range
         self.keep_ratio = keep_ratio
         # TODO: refactor the override option in Resize
-        self.interpolation = interpolation
         self.override = override
         self.bbox_clip_border = bbox_clip_border
 
@@ -220,7 +421,6 @@ class Resize:
                     results[key],
                     results['scale'],
                     return_scale=True,
-                    interpolation=self.interpolation,
                     backend=self.backend)
                 # the w_scale and h_scale has minor difference
                 # a real fix should be done in the mmcv.imrescale in the future
@@ -233,7 +433,6 @@ class Resize:
                     results[key],
                     results['scale'],
                     return_scale=True,
-                    interpolation=self.interpolation,
                     backend=self.backend)
             results[key] = img
 
@@ -2001,8 +2200,6 @@ class Mosaic:
             is True, the filter rule will not be applied, and the
             `min_bbox_size` is invalid. Default to True.
         pad_val (int): Pad value. Default to 114.
-        prob (float): Probability of applying this transformation.
-            Default to 1.0.
     """
 
     def __init__(self,
@@ -2011,12 +2208,8 @@ class Mosaic:
                  min_bbox_size=0,
                  bbox_clip_border=True,
                  skip_filter=True,
-                 pad_val=114,
-                 prob=1.0):
+                 pad_val=114):
         assert isinstance(img_scale, tuple)
-        assert 0 <= prob <= 1.0, 'The probability should be in range [0,1]. '\
-            f'got {prob}.'
-
         log_img_scale(img_scale, skip_square=True)
         self.img_scale = img_scale
         self.center_ratio_range = center_ratio_range
@@ -2024,7 +2217,6 @@ class Mosaic:
         self.bbox_clip_border = bbox_clip_border
         self.skip_filter = skip_filter
         self.pad_val = pad_val
-        self.prob = prob
 
     def __call__(self, results):
         """Call function to make a mosaic of image.
@@ -2035,9 +2227,6 @@ class Mosaic:
         Returns:
             dict: Result dict with mosaic transformed.
         """
-
-        if random.uniform(0, 1) > self.prob:
-            return results
 
         results = self._mosaic_transform(results)
         return results
@@ -2755,165 +2944,4 @@ class YOLOXHSVRandomAug:
         repr_str += f'(hue_delta={self.hue_delta}, '
         repr_str += f'saturation_delta={self.saturation_delta}, '
         repr_str += f'value_delta={self.value_delta})'
-        return repr_str
-
-
-@PIPELINES.register_module()
-class CopyPaste:
-    """Simple Copy-Paste is a Strong Data Augmentation Method for Instance
-    Segmentation The simple copy-paste transform steps are as follows:
-
-    1. The destination image is already resized with aspect ratio kept,
-       cropped and padded.
-    2. Randomly select a source image, which is also already resized
-       with aspect ratio kept, cropped and padded in a similar way
-       as the destination image.
-    3. Randomly select some objects from the source image.
-    4. Paste these source objects to the destination image directly,
-       due to the source and destination image have the same size.
-    5. Update object masks of the destination image, for some origin objects
-       may be occluded.
-    6. Generate bboxes from the updated destination masks and
-       filter some objects which are totally occluded, and adjust bboxes
-       which are partly occluded.
-    7. Append selected source bboxes, masks, and labels.
-
-    Args:
-        max_num_pasted (int): The maximum number of pasted objects.
-            Default: 100.
-        bbox_occluded_thr (int): The threshold of occluded bbox.
-            Default: 10.
-        mask_occluded_thr (int): The threshold of occluded mask.
-            Default: 300.
-        selected (bool): Whether select objects or not. If select is False,
-            all objects of the source image will be pasted to the
-            destination image.
-            Default: True.
-    """
-
-    def __init__(
-        self,
-        max_num_pasted=100,
-        bbox_occluded_thr=10,
-        mask_occluded_thr=300,
-        selected=True,
-    ):
-        self.max_num_pasted = max_num_pasted
-        self.bbox_occluded_thr = bbox_occluded_thr
-        self.mask_occluded_thr = mask_occluded_thr
-        self.selected = selected
-
-    def get_indexes(self, dataset):
-        """Call function to collect indexes.s.
-
-        Args:
-            dataset (:obj:`MultiImageMixDataset`): The dataset.
-        Returns:
-            list: Indexes.
-        """
-        return random.randint(0, len(dataset))
-
-    def __call__(self, results):
-        """Call function to make a copy-paste of image.
-
-        Args:
-            results (dict): Result dict.
-        Returns:
-            dict: Result dict with copy-paste transformed.
-        """
-
-        assert 'mix_results' in results
-        num_images = len(results['mix_results'])
-        assert num_images == 1, \
-            f'CopyPaste only supports processing 2 images, got {num_images}'
-        if self.selected:
-            selected_results = self._select_object(results['mix_results'][0])
-        else:
-            selected_results = results['mix_results'][0]
-        return self._copy_paste(results, selected_results)
-
-    def _select_object(self, results):
-        """Select some objects from the source results."""
-        bboxes = results['gt_bboxes']
-        labels = results['gt_labels']
-        masks = results['gt_masks']
-        max_num_pasted = min(bboxes.shape[0] + 1, self.max_num_pasted)
-        num_pasted = np.random.randint(0, max_num_pasted)
-        selected_inds = np.random.choice(
-            bboxes.shape[0], size=num_pasted, replace=False)
-
-        selected_bboxes = bboxes[selected_inds]
-        selected_labels = labels[selected_inds]
-        selected_masks = masks[selected_inds]
-
-        results['gt_bboxes'] = selected_bboxes
-        results['gt_labels'] = selected_labels
-        results['gt_masks'] = selected_masks
-        return results
-
-    def _copy_paste(self, dst_results, src_results):
-        """CopyPaste transform function.
-
-        Args:
-            dst_results (dict): Result dict of the destination image.
-            src_results (dict): Result dict of the source image.
-        Returns:
-            dict: Updated result dict.
-        """
-        dst_img = dst_results['img']
-        dst_bboxes = dst_results['gt_bboxes']
-        dst_labels = dst_results['gt_labels']
-        dst_masks = dst_results['gt_masks']
-
-        src_img = src_results['img']
-        src_bboxes = src_results['gt_bboxes']
-        src_labels = src_results['gt_labels']
-        src_masks = src_results['gt_masks']
-
-        if len(src_bboxes) == 0:
-            return dst_results
-
-        # update masks and generate bboxes from updated masks
-        composed_mask = np.where(np.any(src_masks.masks, axis=0), 1, 0)
-        updated_dst_masks = self.get_updated_masks(dst_masks, composed_mask)
-        updated_dst_bboxes = updated_dst_masks.get_bboxes()
-        assert len(updated_dst_bboxes) == len(updated_dst_masks)
-
-        # filter totally occluded objects
-        bboxes_inds = np.all(
-            np.abs(
-                (updated_dst_bboxes - dst_bboxes)) <= self.bbox_occluded_thr,
-            axis=-1)
-        masks_inds = updated_dst_masks.masks.sum(
-            axis=(1, 2)) > self.mask_occluded_thr
-        valid_inds = bboxes_inds | masks_inds
-
-        # Paste source objects to destination image directly
-        img = dst_img * (1 - composed_mask[..., np.newaxis]
-                         ) + src_img * composed_mask[..., np.newaxis]
-        bboxes = np.concatenate([updated_dst_bboxes[valid_inds], src_bboxes])
-        labels = np.concatenate([dst_labels[valid_inds], src_labels])
-        masks = np.concatenate(
-            [updated_dst_masks.masks[valid_inds], src_masks.masks])
-
-        dst_results['img'] = img
-        dst_results['gt_bboxes'] = bboxes
-        dst_results['gt_labels'] = labels
-        dst_results['gt_masks'] = BitmapMasks(masks, masks.shape[1],
-                                              masks.shape[2])
-
-        return dst_results
-
-    def get_updated_masks(self, masks, composed_mask):
-        assert masks.masks.shape[-2:] == composed_mask.shape[-2:], \
-            'Cannot compare two arrays of different size'
-        masks.masks = np.where(composed_mask, 0, masks.masks)
-        return masks
-
-    def __repr__(self):
-        repr_str = self.__class__.__name__
-        repr_str += f'max_num_pasted={self.max_num_pasted}, '
-        repr_str += f'bbox_occluded_thr={self.bbox_occluded_thr}, '
-        repr_str += f'mask_occluded_thr={self.mask_occluded_thr}, '
-        repr_str += f'selected={self.selected}, '
         return repr_str
