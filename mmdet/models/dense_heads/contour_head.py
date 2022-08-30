@@ -85,6 +85,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         normed_instance_shape_embed = get_gcn_feature(normed_shape_embed, centers.unsqueeze(1),
                                                       inds, img_h, img_w).squeeze(1)
         normed_instance_shape_embed = normed_instance_shape_embed.reshape(centers.size(0), self.point_nums, 2).sigmoid()
+        normed_instance_shape_embed = normed_instance_shape_embed * 2. - 1.
         whs = whs.unsqueeze(1).repeat(1, normed_instance_shape_embed.size(1), 1)
         instance_shape_embed = normed_instance_shape_embed * whs * self.init_stride
         contour_proposals = instance_shape_embed + centers.unsqueeze(1).repeat(1, normed_instance_shape_embed.size(1), 1)
@@ -101,6 +102,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         normed_instance_global_offset = self.linear2(instance_global_deform_features).reshape(centers.size(0),
                                                                                               self.point_nums,
                                                                                               2).sigmoid()
+        normed_instance_global_offset = normed_instance_global_offset * 2. -1.
         instance_global_offset = normed_instance_global_offset * whs * self.global_deform_stride
         coarse_contour = instance_global_offset + contour_proposals
 
@@ -240,6 +242,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1).sigmoid()
+            normed_offset = normed_offset * 2. - 1.
             offset = normed_offset * whs * self.evolve_deform_stride
             py_out = py_in + offset
             outputs_contours.append(py_out)
@@ -283,6 +286,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                 proposal_list (list[Tensor]): Proposals of each image.
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
+        gt_contours = torch.cat(gt_contours, dim=0)
         output_contours, normed_offsets, iter_whs = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
         for i in range(len(normed_offsets)):

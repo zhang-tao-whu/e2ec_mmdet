@@ -49,11 +49,11 @@ class AlignSampleBoundary:
         for gt_poly, label in zip(gt_polys, gt_labels):
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
-                if self.reset_bbox:
+                succeed = self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
+                if succeed and self.reset_bbox:
                     reset_labels.append(label)
                     bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
                     reset_bboxes.append(bbox)
-                self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
 
         if len(sampled_polys) != 0:
             results['gt_polys'] = np.stack(sampled_polys, axis=0)
@@ -92,7 +92,7 @@ class AlignSampleBoundary:
         img_gt_poly = self.uniformsample(poly, ori_nodes * self.point_nums)
         idx = self.four_idx(img_gt_poly)
         if self.ignore_poly(idx):
-            return 
+            return False
         img_gt_poly = self.get_img_gt(img_gt_poly, idx, t=self.point_nums)
         key_mask = self.get_keypoints_mask(key_points)
         key_points = key_points[key_mask.astype(np.bool)]
@@ -108,7 +108,7 @@ class AlignSampleBoundary:
         keyPointsMask.append(key_mask)
         img_gt_polys.append(img_gt_poly)
         key_points_list.append(key_points)
-        return
+        return True
 
     def get_cw_polys(self, poly):
         return poly[::-1] if Polygon(poly).exterior.is_ccw else poly

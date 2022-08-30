@@ -78,7 +78,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
                                               gt_labels, gt_bboxes_ignore)
-        contour_proposals, losses_contour_proposal, inds = self.contour_proposal_head.forward_train(x, img_metas,
+        losses_contour_proposal, contour_proposals, inds = self.contour_proposal_head.forward_train(x, img_metas,
                                                                                               gt_bboxes, gt_contours)
         losses_contour_evolve = self.contour_evolve_head.forward_train(x, img_metas, contour_proposals,
                                                                        gt_contours, inds)
