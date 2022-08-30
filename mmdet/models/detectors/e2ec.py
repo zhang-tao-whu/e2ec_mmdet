@@ -50,7 +50,10 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                       img_metas,
                       gt_bboxes,
                       gt_labels,
-                      gt_contours,
+                      gt_polys,
+                      gt_masks=None,
+                      key_points=None,
+                      key_points_masks=None,
                       gt_bboxes_ignore=None):
         """
         Args:
@@ -71,6 +74,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             dict[str, Tensor]: A dictionary of loss components.
         """
         super(SingleStageDetector, self).forward_train(img, img_metas)
+        gt_contours = gt_polys
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
                                               gt_labels, gt_bboxes_ignore)

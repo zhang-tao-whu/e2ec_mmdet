@@ -36,6 +36,8 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                      beta=0.2,
                      loss_weight=1.0),
                  init_cfg=None,
+                 train_cfg=None,
+                 test_cfg=None,
                  ):
         super(BaseContourProposalHead, self).__init__(init_cfg)
         self.point_nums = point_nums
@@ -142,7 +144,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                 proposal_list (list[Tensor]): Proposals of each image.
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        inds = torch.cat([torch.full([len(gt_bboxes[i])], i) for i in range(len(gt_bboxes))], dim=0).to(x.device)
+        inds = torch.cat([torch.full([len(gt_bboxes[i])], i) for i in range(len(gt_bboxes))], dim=0).to(x[0].device)
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
         gt_contours = torch.cat(gt_contours, dim=0)
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
@@ -199,6 +201,8 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                      beta=0.2,
                      loss_weight=1.0),
                  init_cfg=None,
+                 train_cfg=None,
+                 test_cfg=None,
                  ):
         super(BaseContourEvolveHead, self).__init__(init_cfg)
         self.point_nums = point_nums
