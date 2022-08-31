@@ -46,22 +46,22 @@ model = dict(
         in_channel=256,
         hidden_dim=256,
         point_nums=128,
-        global_deform_stride=0.2,
+        global_deform_stride=10.,
         init_stride=0.5,
         loss_contour=dict(
             type='SmoothL1Loss',
-            beta=0.2,
+            beta=0.1,
             loss_weight=1.0),
     ),
     contour_evolve_head=dict(
         type='BaseContourEvolveHead',
         in_channel=256,
         point_nums=128,
-        evolve_deform_stride=0.1,
+        evolve_deform_stride=4.,
         iter_num=3,
         loss_contour=dict(
             type='SmoothL1Loss',
-            beta=0.2,
+            beta=0.25,
             loss_weight=1.0),
     ),
     # training and testing settings
