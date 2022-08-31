@@ -178,7 +178,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                 with shape (n, ).
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        inds = torch.cat([torch.full([len(pred_bboxes[i])], i) for i in range(len(pred_bboxes))], dim=0).to(feats.device)
+        inds = torch.cat([torch.full([len(pred_bboxes[i])], i) for i in range(len(pred_bboxes))], dim=0).to(feats[0].device)
         pred_bboxes = torch.cat(pred_bboxes, dim=0)
 
         pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.

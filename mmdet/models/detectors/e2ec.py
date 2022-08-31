@@ -5,9 +5,31 @@ import warnings
 
 import torch
 
-from mmdet.core import bbox2result, multi_apply
+from mmdet.core import bbox2result
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
 import pycocotools.mask as maskUtils
+from functools import partial
+
+def multi_apply(func, *args, **kwargs):
+    """Apply function to a list of arguments.
+
+    Note:
+        This function applies the ``func`` to multiple inputs and
+        map the multiple outputs of the ``func`` into different
+        list. Each list contains the same type of outputs corresponding
+        to different inputs.
+
+    Args:
+        func (Function): A function that will be applied to a list of
+            arguments
+
+    Returns:
+        tuple(list): A tuple containing multiple list, each list contains \
+            a kind of returned results by the function
+    """
+    pfunc = partial(func, **kwargs) if kwargs else func
+    map_results = map(pfunc, *args)
+    return tuple(map_results)
 
 @DETECTORS.register_module()
 class ContourBasedInstanceSegmentor(SingleStageDetector):
@@ -114,30 +136,33 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         labels_pred = [item[1] for item in results_list]
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
         contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
-        img_shape = img_metas[0]['batch_input_shape']
-        mask_results = self.convert_contour2mask(contours_pred, labels_pred, img_shape)
+        mask_results = self.convert_contour2mask(contours_pred, labels_pred, img_metas)
         return list(zip(bbox_results, mask_results))
 
-    def single_convert_contour2mask(self, contours_pred, labels_pred, img_shape):
+    def single_convert_contour2mask(self, contours_pred, labels_pred, img_meta):
+        img_shape = img_meta['img_shape'][:2]
+        ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred = labels_pred.detach().cpu().numpy()
         rles = []
         for contour in contours_pred:
+            contour[..., 0] = contour[..., 0] / img_shape[0] * ori_shape[0]
+            contour[..., 1] = contour[..., 1] / img_shape[1] * ori_shape[1]
             contour = contour.flatten().tolist()
-            rle = maskUtils.frPyObjects([contour], img_shape[0], img_shape[1])
+            rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
             rles += rle
         masks = maskUtils.decode(rles).transpose(2, 0, 1)
         for mask, label in zip(masks, labels_pred):
             mask_pred[int(label)].append(mask)
         return mask_pred
 
-    def convert_contour2mask(self, contours_preds, labels_preds, img_shape):
+    def convert_contour2mask(self, contours_preds, labels_preds, img_metas):
         #masks_pred [single img masks_pred]
         #single img masks_pred [single class instances mask]
         #instance mask (h, w)
         return multi_apply(self.single_convert_contour2mask,
-                           contours_preds, labels_preds, img_shape=img_shape)
+                           contours_preds, labels_preds, img_metas)
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     """Test function with test time augmentation.

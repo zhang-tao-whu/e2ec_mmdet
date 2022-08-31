@@ -49,10 +49,15 @@ class AlignSampleBoundary:
         for gt_poly, label in zip(gt_polys, gt_labels):
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
+                if len(poly) < 3:
+                    continue
+                bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
+                h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]
+                if h <= 1 or w <= 1:
+                    continue
                 succeed = self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
                 if succeed and self.reset_bbox:
                     reset_labels.append(label)
-                    bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
                     reset_bboxes.append(bbox)
 
         if len(sampled_polys) != 0:
