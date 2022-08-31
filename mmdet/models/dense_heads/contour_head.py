@@ -29,8 +29,12 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                  in_channel=256,
                  hidden_dim=256,
                  point_nums=128,
-                 global_deform_stride=0.2,
+                 global_deform_stride=10.0,
                  init_stride=0.5,
+                 loss_init=dict(
+                     type='L1Loss',
+                     loss_weight=1.0,
+                 ),
                  loss_contour=dict(
                      type='SmoothL1Loss',
                      beta=0.2,
@@ -58,6 +62,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                                        out_features=point_nums * 2, bias=True)
 
         self.loss_contour = build_loss(loss_contour)
+        self.loss_init = build_loss(loss_init)
 
     def init_fc(self, fc):
         if isinstance(fc, nn.Conv2d):
@@ -100,10 +105,8 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         instance_global_deform_features = self.linear1(instance_global_deform_features)
         instance_global_deform_features = self.relu3(instance_global_deform_features)
         normed_instance_global_offset = self.linear2(instance_global_deform_features).reshape(centers.size(0),
-                                                                                              self.point_nums,
-                                                                                              2).sigmoid()
-        normed_instance_global_offset = normed_instance_global_offset * 2. -1.
-        instance_global_offset = normed_instance_global_offset * whs * self.global_deform_stride
+                                                                                              self.point_nums, 2)
+        instance_global_offset = normed_instance_global_offset * self.global_deform_stride
         coarse_contour = instance_global_offset + contour_proposals
 
         return contour_proposals, coarse_contour, normed_instance_shape_embed, normed_instance_global_offset
@@ -111,7 +114,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
     def loss(self, normed_init_offset_pred, normed_global_offset_pred,
              normed_init_offset_target, normed_global_offset_target):
         """Compute losses of the head."""
-        loss_init = self.loss_contour(normed_init_offset_pred, normed_init_offset_target)
+        loss_init = self.loss_init(normed_init_offset_pred, normed_init_offset_target)
         loss_coarse = self.loss_contour(normed_global_offset_pred, normed_global_offset_target)
         return dict(loss_init_contour=loss_init,
                     loss_coarse_contour=loss_coarse)
@@ -120,7 +123,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums, 1)
         gt_whs = gt_whs.unsqueeze(1).repeat(1, self.point_nums, 1)
         normed_init_offset_target = (gt_contours - gt_centers) / (gt_whs * self.init_stride)
-        normed_global_offset_target = (gt_contours - contour_proposals) / (gt_whs * self.global_deform_stride)
+        normed_global_offset_target = (gt_contours - contour_proposals) / self.global_deform_stride
         return normed_init_offset_target.detach(), normed_global_offset_target.detach()
 
     def forward_train(self,
@@ -196,11 +199,11 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
     def __init__(self,
                  in_channel=256,
                  point_nums=128,
-                 evolve_deform_stride=0.1,
+                 evolve_deform_stride=4.,
                  iter_num=3,
                  loss_contour=dict(
                      type='SmoothL1Loss',
-                     beta=0.2,
+                     beta=0.25,
                      loss_weight=1.0),
                  init_cfg=None,
                  train_cfg=None,
@@ -231,24 +234,19 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
     def forward(self, x, contour_proposals, img_h, img_w, inds, use_fpn_level=0):
         x = x[use_fpn_level]
         outputs_contours = [contour_proposals]
-        iter_whs = []
         normed_offsets = []
         # evolve contour
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
-            whs = torch.max(py_in, dim=1)[0] - torch.min(py_in, dim=1)[0]
-            whs = whs.unsqueeze(1).repeat(1, self.point_nums, 1)
-            iter_whs.append(whs)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
-            normed_offset = evolve_gcn(py_features).permute(0, 2, 1).sigmoid()
-            normed_offset = normed_offset * 2. - 1.
-            offset = normed_offset * whs * self.evolve_deform_stride
+            normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
+            offset = normed_offset * self.evolve_deform_stride
             py_out = py_in + offset
             outputs_contours.append(py_out)
             normed_offsets.append(normed_offset)
         assert len(outputs_contours) == len(normed_offsets) + 1
-        return outputs_contours, normed_offsets, iter_whs
+        return outputs_contours, normed_offsets
 
     def loss(self, normed_offsets_preds, normed_offsets_targets):
         """Compute losses of the head."""
@@ -258,8 +256,8 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             ret.update({'evolve_loss_' + str(i): loss})
         return ret
 
-    def get_targets(self, py_in, gt_contours, whs):
-        normed_offset_target = (gt_contours - py_in) / (whs * self.evolve_deform_stride)
+    def get_targets(self, py_in, gt_contours):
+        normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
         return normed_offset_target.detach()
 
     def forward_train(self,
@@ -287,10 +285,10 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
         gt_contours = torch.cat(gt_contours, dim=0)
-        output_contours, normed_offsets, iter_whs = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
         for i in range(len(normed_offsets)):
-            normed_offset_target = self.get_targets(output_contours[i], gt_contours, iter_whs[i])
+            normed_offset_target = self.get_targets(output_contours[i], gt_contours)
             normed_offsets_targets.append(normed_offset_target)
         losses = self.loss(normed_offsets, normed_offsets_targets)
         return losses
@@ -318,7 +316,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                 with shape (n, ).
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        output_contours, normed_offsets, iter_whs = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
         output_contour = output_contours[ret_stage]
         ret = []
         for i in range(len(img_metas)):
