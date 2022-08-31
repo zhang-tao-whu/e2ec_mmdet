@@ -5,6 +5,7 @@ import torch
 from mmcv.cnn.utils.weight_init import constant_init
 from mmcv.ops import batched_nms
 from mmcv.runner import BaseModule, force_fp32
+from mmdet.core import reduce_mean
 from ..builder import HEADS, build_loss
 from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
 import torch.nn as nn
@@ -52,15 +53,15 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                  hidden_dim=256,
                  point_nums=128,
                  global_deform_stride=10.0,
-                 init_stride=0.5,
+                 init_stride=10.0,
                  loss_init=dict(
-                     type='L1Loss',
-                     loss_weight=1.0,
-                 ),
+                     type='SmoothL1Loss',
+                     beta=0.1,
+                     loss_weight=0.2),
                  loss_contour=dict(
                      type='SmoothL1Loss',
-                     beta=0.2,
-                     loss_weight=1.0),
+                     beta=0.1,
+                     loss_weight=0.1),
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
@@ -103,7 +104,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         self.init_fc(self.fc3)
         self.init_fc(self.fc4)
 
-    def forward(self, x, centers, img_h, img_w, inds, whs, use_fpn_level=0):
+    def forward(self, x, centers, img_h, img_w, inds, use_fpn_level=0):
         x = x[use_fpn_level]
         #init_contour proposal
         normed_shape_embed = self.fc1(x)
@@ -111,10 +112,8 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         normed_shape_embed = self.fc2(normed_shape_embed)
         normed_instance_shape_embed = get_gcn_feature(normed_shape_embed, centers.unsqueeze(1),
                                                       inds, img_h, img_w).squeeze(1)
-        normed_instance_shape_embed = normed_instance_shape_embed.reshape(centers.size(0), self.point_nums, 2).sigmoid()
-        normed_instance_shape_embed = normed_instance_shape_embed * 2. - 1.
-        whs = whs.unsqueeze(1).repeat(1, normed_instance_shape_embed.size(1), 1)
-        instance_shape_embed = normed_instance_shape_embed * whs * self.init_stride
+        normed_instance_shape_embed = normed_instance_shape_embed.reshape(centers.size(0), self.point_nums, 2)
+        instance_shape_embed = normed_instance_shape_embed * self.init_stride
         contour_proposals = instance_shape_embed + centers.unsqueeze(1).repeat(1, normed_instance_shape_embed.size(1), 1)
 
         #coarse contour proposal
@@ -136,15 +135,19 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
     def loss(self, normed_init_offset_pred, normed_global_offset_pred,
              normed_init_offset_target, normed_global_offset_target):
         """Compute losses of the head."""
-        loss_init = self.loss_init(normed_init_offset_pred, normed_init_offset_target)
-        loss_coarse = self.loss_contour(normed_global_offset_pred, normed_global_offset_target)
+        num_poly = torch.tensor(
+            len(normed_init_offset_target), dtype=torch.float, device=normed_init_offset_pred.device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
+        loss_init = self.loss_init(normed_init_offset_pred, normed_init_offset_target,
+                                   avg_factor=num_poly * self.point_nums * 2)
+        loss_coarse = self.loss_contour(normed_global_offset_pred, normed_global_offset_target,
+                                        avg_factor=num_poly * self.point_nums * 2)
         return dict(loss_init_contour=loss_init,
                     loss_coarse_contour=loss_coarse)
 
-    def get_targets(self, gt_contours, gt_centers, gt_whs, contour_proposals):
+    def get_targets(self, gt_contours, gt_centers, contour_proposals):
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums, 1)
-        gt_whs = gt_whs.unsqueeze(1).repeat(1, self.point_nums, 1)
-        normed_init_offset_target = (gt_contours - gt_centers) / (gt_whs * self.init_stride)
+        normed_init_offset_target = (gt_contours - gt_centers) / self.init_stride
         normed_global_offset_target = (gt_contours - contour_proposals) / self.global_deform_stride
         return normed_init_offset_target.detach(), normed_global_offset_target.detach()
 
@@ -175,11 +178,10 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
         gt_contours = torch.cat(gt_contours, dim=0)
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
-        whs = gt_bboxes[..., 2:4] - gt_bboxes[..., :2]
 
-        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(x, gt_centers, img_h, img_w,
-                                                                                            inds, whs)
-        normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers, whs,
+        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(x, gt_centers,
+                                                                                           img_h, img_w, inds)
+        normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers,
                                                                                   contour_proposals)
         losses = self.loss(normed_init_offset, normed_global_offset,
                            normed_init_offset_target, normed_global_offset_target)
@@ -220,10 +222,9 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         pred_bboxes = torch.cat(pred_bboxes, dim=0)
 
         pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.
-        whs = pred_bboxes[..., 2:4] - pred_bboxes[..., :2]
 
         contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(feats, pred_centers, img_h,
-                                                                                           img_w, inds, whs)
+                                                                                           img_w, inds)
         return coarse_contour, inds
 
 
@@ -286,8 +287,11 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
     def loss(self, normed_offsets_preds, normed_offsets_targets):
         """Compute losses of the head."""
         ret = dict()
+        num_poly = torch.tensor(
+            len(normed_offsets_targets), dtype=torch.float, device=normed_offsets_preds.device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
         for i, (offsets_preds, offsets_targets) in enumerate(zip(normed_offsets_preds, normed_offsets_targets)):
-            loss = self.loss_contour(offsets_preds, offsets_targets)
+            loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums * 2)
             ret.update({'evolve_loss_' + str(i): loss})
         return ret
 

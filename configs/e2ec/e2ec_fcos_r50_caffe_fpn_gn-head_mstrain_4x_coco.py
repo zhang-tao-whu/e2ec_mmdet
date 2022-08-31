@@ -92,7 +92,8 @@ train_pipeline = [
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True, poly2mask=False),
     dict(
         type='Resize',
-        img_scale=(736, 512),
+        img_scale=[(736, 256), (736, 608)],
+        multiscale_mode='range',
         keep_ratio=True),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
@@ -134,5 +135,5 @@ lr_config = dict(
     warmup='constant',
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
-    step=[8, 11])
-runner = dict(type='EpochBasedRunner', max_epochs=12)
+    step=[40, 45])
+runner = dict(type='EpochBasedRunner', max_epochs=48)
