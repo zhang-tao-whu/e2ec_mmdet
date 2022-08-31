@@ -288,7 +288,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         """Compute losses of the head."""
         ret = dict()
         num_poly = torch.tensor(
-            len(normed_offsets_targets), dtype=torch.float, device=normed_offsets_preds.device)
+            len(normed_offsets_targets[0]), dtype=torch.float, device=normed_offsets_preds[0].device)
         num_poly = max(reduce_mean(num_poly), 1.0)
         for i, (offsets_preds, offsets_targets) in enumerate(zip(normed_offsets_preds, normed_offsets_targets)):
             loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums * 2)
