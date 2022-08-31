@@ -10,7 +10,7 @@ from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
 import torch.nn as nn
 
 def get_gcn_feature(cnn_feature, img_poly, ind, h, w):
-    img_poly = img_poly.clone()
+    img_poly = img_poly.clone().detach()
     img_poly[..., 0] = img_poly[..., 0] / (w / 2.) - 1
     img_poly[..., 1] = img_poly[..., 1] / (h / 2.) - 1
     batch_size = cnn_feature.size(0)
