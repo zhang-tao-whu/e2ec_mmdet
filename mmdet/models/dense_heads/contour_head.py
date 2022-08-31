@@ -8,6 +8,28 @@ from mmcv.runner import BaseModule, force_fp32
 from ..builder import HEADS, build_loss
 from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
 import torch.nn as nn
+from functools import partial
+
+def multi_apply(func, *args, **kwargs):
+    """Apply function to a list of arguments.
+
+    Note:
+        This function applies the ``func`` to multiple inputs and
+        map the multiple outputs of the ``func`` into different
+        list. Each list contains the same type of outputs corresponding
+        to different inputs.
+
+    Args:
+        func (Function): A function that will be applied to a list of
+            arguments
+
+    Returns:
+        tuple(list): A tuple containing multiple list, each list contains \
+            a kind of returned results by the function
+    """
+    pfunc = partial(func, **kwargs) if kwargs else func
+    map_results = map(pfunc, *args)
+    return tuple(map_results)
 
 def get_gcn_feature(cnn_feature, img_poly, ind, h, w):
     img_poly = img_poly.clone().detach()
@@ -163,6 +185,17 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                            normed_init_offset_target, normed_global_offset_target)
         return losses, coarse_contour, inds
 
+    def convert_single_imagebboxes2featurebboxes(self, bboxes_, img_meta):
+        bboxes = bboxes_[:, :]
+        img_shape = img_meta['img_shape'][:2]
+        ori_shape = img_meta['ori_shape'][:2]
+        bboxes[:, [0, 2]] = bboxes[:, [0, 2]] / ori_shape[0] * img_shape[0]
+        bboxes[:, [1, 3]] = bboxes[:, [1, 3]] / ori_shape[0] * img_shape[0]
+        return bboxes
+
+    def convert_imagebboxes2featurebboxes(self, bboxes, img_metas):
+        return multi_apply(self.convert_single_imagebboxes2featurebboxes, bboxes, img_metas)
+
     def simple_test(self, feats, img_metas, pred_bboxes):
         """Test function without test-time augmentation.
 
@@ -182,6 +215,8 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
         inds = torch.cat([torch.full([len(pred_bboxes[i])], i) for i in range(len(pred_bboxes))], dim=0).to(feats[0].device)
+        pred_bboxes = self.convert_imagebboxes2featurebboxes(pred_bboxes, img_metas)
+
         pred_bboxes = torch.cat(pred_bboxes, dim=0)
 
         pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.
