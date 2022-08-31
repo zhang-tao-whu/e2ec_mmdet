@@ -51,7 +51,10 @@ model = dict(
         loss_contour=dict(
             type='SmoothL1Loss',
             beta=0.1,
-            loss_weight=1.0),
+            loss_weight=0.1),
+        loss_init=dict(
+            type='L1Loss',
+            loss_weight=0.1),
     ),
     contour_evolve_head=dict(
         type='BaseContourEvolveHead',
