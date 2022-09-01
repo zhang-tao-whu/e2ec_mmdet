@@ -2,10 +2,11 @@
 from ..builder import DETECTORS
 from .single_stage import SingleStageDetector
 import warnings
-
+import numpy as np
 import torch
 
 from mmdet.core import bbox2result
+from mmdet.core.bbox.iou_calculators import bbox_overlaps
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
 import pycocotools.mask as maskUtils
 from functools import partial
@@ -128,27 +129,38 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         #results_list [(bboxes, labels), ...]
         # boxes (Tensor): Bboxes with score after nms, has shape (num_bboxes, 5). last dimension 5 arrange as (x1, y1, x2, y2, score)
         # labels (Tensor): has shape (num_bboxes, )
-        bbox_results = [
-            bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
-            for det_bboxes, det_labels in results_list
-        ]
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
         contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
-        mask_results = self.convert_contour2mask(contours_pred, labels_pred, img_metas)
+        mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
+        results_list = list(*zip(bboxes_pred, labels_pred))
+        bbox_results = [
+            bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
+            for det_bboxes, det_labels in results_list
+        ]
         return list(zip(bbox_results, mask_results))
 
-    def single_convert_contour2mask(self, contours_pred, labels_pred, img_meta):
+    def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred, img_meta, rescore=True):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
+        contours_pred[..., 0] = contours_pred[..., 0] / img_shape[0] * ori_shape[0]
+        contours_pred[..., 1] = contours_pred[..., 1] / img_shape[1] * ori_shape[1]
+        if rescore:
+            scores_pred = bboxes_pred[..., 4]
+            contours_maxp = torch.max(contours_pred, dim=1)[0]
+            contours_minp = torch.min(contours_pred, dim=1)[0]
+            contours_bboxes = torch.cat([contours_minp, contours_maxp], dim=-1)
+            bboxes = bboxes_pred[..., :4]
+            ious = bbox_overlaps(bboxes, contours_bboxes, is_aligned=True)
+            scores_pred = (ious * scores_pred) ** 0.5
+            bboxes_pred[..., 4] *= 0
+            bboxes_pred[..., 4] += scores_pred
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred = labels_pred.detach().cpu().numpy()
         rles = []
         for contour in contours_pred:
-            contour[..., 0] = contour[..., 0] / img_shape[0] * ori_shape[0]
-            contour[..., 1] = contour[..., 1] / img_shape[1] * ori_shape[1]
             contour = contour.flatten().tolist()
             rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
             rles += rle
@@ -157,12 +169,13 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             mask_pred[int(label)].append(mask)
         return mask_pred
 
-    def convert_contour2mask(self, contours_preds, labels_preds, img_metas):
+    def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas, rescore=True):
         #masks_pred [single img masks_pred]
         #single img masks_pred [single class instances mask]
         #instance mask (h, w)
         return multi_apply(self.single_convert_contour2mask,
-                           contours_preds, labels_preds, img_metas)
+                           contours_preds, labels_preds, bboxes_pred,
+                           img_metas, rescore=rescore)
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     """Test function with test time augmentation.
