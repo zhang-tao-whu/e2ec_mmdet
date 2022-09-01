@@ -10,6 +10,7 @@ from mmdet.core.bbox.iou_calculators import bbox_overlaps
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
 import pycocotools.mask as maskUtils
 from functools import partial
+import time
 
 def multi_apply(func, *args, **kwargs):
     """Apply function to a list of arguments.
@@ -123,22 +124,26 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                 The outer list corresponds to each image. The inner list
                 corresponds to each class.
         """
+        fcos_start = time.time()
         feat = self.extract_feat(img)
         results_list = self.bbox_head.simple_test(
             feat, img_metas, rescale=rescale)
         #results_list [(bboxes, labels), ...]
         # boxes (Tensor): Bboxes with score after nms, has shape (num_bboxes, 5). last dimension 5 arrange as (x1, y1, x2, y2, score)
         # labels (Tensor): has shape (num_bboxes, )
+        fcos_end = time.time()
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
         contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
+        contour_gen_end = time.time()
         mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
-        results_list = list(*zip(bboxes_pred, labels_pred))
+        results_list = list(zip(bboxes_pred, labels_pred))
         bbox_results = [
             bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
             for det_bboxes, det_labels in results_list
         ]
+        post_end = time.time()
         return list(zip(bbox_results, mask_results))
 
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred, img_meta, rescore=True):

@@ -188,7 +188,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         return losses, coarse_contour, inds
 
     def convert_single_imagebboxes2featurebboxes(self, bboxes_, img_meta):
-        bboxes = bboxes_[:, :]
+        bboxes = bboxes_.clone()
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         bboxes[:, [0, 2]] = bboxes[:, [0, 2]] / ori_shape[0] * img_shape[0]
@@ -251,7 +251,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         self.iter_num = iter_num
         # evolve component
         for i in range(iter_num):
-            evolve_gcn = Snake(state_dim=in_channel)
+            evolve_gcn = Snake(state_dim=128, feature_dim=in_channel)
             self.__setattr__('evolve_gcn' + str(i), evolve_gcn)
         self.loss_contour = build_loss(loss_contour)
 
@@ -414,8 +414,12 @@ class BasicBlock(nn.Module):
 
 
 class Snake(nn.Module):
-    def __init__(self, state_dim):
+    def __init__(self, state_dim, feature_dim):
         super(Snake, self).__init__()
+        if state_dim != feature_dim:
+            self.head = self.head = BasicBlock(feature_dim, state_dim, 'dgrid')
+        else:
+            self.head = None
         self.res_layer_num = 7
         dilation = [1, 1, 1, 2, 2, 4, 4]
         n_adj = 4
@@ -440,6 +444,8 @@ class Snake(nn.Module):
         )
 
     def forward(self, x):
+        if self.head is not None:
+            x = self.head(x)
         states = [x]
         for i in range(self.res_layer_num):
             x = self.__getattr__('res' + str(i))(x) + x
