@@ -260,10 +260,13 @@ class E2EC(ContourBasedInstanceSegmentor):
                  bbox_head=None,
                  contour_proposal_head=None,
                  contour_evolve_head=None,
+                 detector_fpn_start_level=1,
+                 contour_fpn_start_level=1,
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
                  init_cfg=None):
         super(E2EC, self).__init__(backbone, neck, bbox_head, contour_proposal_head,
-                                   contour_evolve_head, train_cfg,
+                                   contour_evolve_head, detector_fpn_start_level,
+                                   contour_fpn_start_level, train_cfg,
                                    test_cfg, pretrained, init_cfg)
