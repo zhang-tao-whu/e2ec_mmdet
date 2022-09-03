@@ -5,8 +5,6 @@ _base_ = [
 # model settings
 model = dict(
     type='E2EC',
-    detector_fpn_start_level=1, #start fron P3
-    contour_fpn_start_level=1,
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -23,9 +21,9 @@ model = dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
-        start_level=0,
+        start_level=1,
         add_extra_convs='on_output',  # use P5
-        num_outs=6,
+        num_outs=5,
         relu_before_extra_convs=True),
     bbox_head=dict(
         type='FCOSHead',
@@ -70,6 +68,8 @@ model = dict(
             beta=0.25,
             loss_weight=0.33),
     ),
+    detector_fpn_start_level=0, #start fron P3
+    contour_fpn_start_level=0,
     # training and testing settings
     train_cfg=dict(
         assigner=dict(

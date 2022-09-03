@@ -68,6 +68,8 @@ model = dict(
             beta=0.25,
             loss_weight=0.33),
     ),
+    detector_fpn_start_level=0, #start fron P3
+    contour_fpn_start_level=0,
     # training and testing settings
     train_cfg=dict(
         assigner=dict(

@@ -109,7 +109,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         losses_contour_proposal, contour_proposals, inds = \
             self.contour_proposal_head.forward_train(x[self.contour_fpn_start_level:],
                                                        img_metas, gt_bboxes, gt_contours)
-        losses_contour_evolve = self.contour_evolve_head.forward_train(x[self.contour_fpn_start_level],
+        losses_contour_evolve = self.contour_evolve_head.forward_train(x[self.contour_fpn_start_level:],
                                                                        img_metas, contour_proposals,
                                                                        gt_contours, inds)
         losses.update(losses_contour_proposal)
@@ -138,8 +138,8 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         # labels (Tensor): has shape (num_bboxes, )
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
-        contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
-        contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
+        contour_proposals, inds = self.contour_proposal_head.simple_test(feat[self.contour_fpn_start_level:], img_metas, bboxes_pred)
+        contours_pred = self.contour_evolve_head.simple_test(feat[self.contour_fpn_start_level:], img_metas, contour_proposals, inds)
         mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
         results_list = list(zip(bboxes_pred, labels_pred))
         bbox_results = [
