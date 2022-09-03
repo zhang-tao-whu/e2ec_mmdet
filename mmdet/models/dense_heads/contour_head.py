@@ -220,7 +220,6 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         pred_bboxes = self.convert_imagebboxes2featurebboxes(pred_bboxes, img_metas)
 
         pred_bboxes = torch.cat(pred_bboxes, dim=0)
-
         pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.
 
         contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(feats, pred_centers, img_h,
