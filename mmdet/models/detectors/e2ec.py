@@ -124,29 +124,26 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                 The outer list corresponds to each image. The inner list
                 corresponds to each class.
         """
-        fcos_start = time.time()
         feat = self.extract_feat(img)
         results_list = self.bbox_head.simple_test(
             feat, img_metas, rescale=rescale)
         #results_list [(bboxes, labels), ...]
         # boxes (Tensor): Bboxes with score after nms, has shape (num_bboxes, 5). last dimension 5 arrange as (x1, y1, x2, y2, score)
         # labels (Tensor): has shape (num_bboxes, )
-        fcos_end = time.time()
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat, img_metas, bboxes_pred)
         contours_pred = self.contour_evolve_head.simple_test(feat, img_metas, contour_proposals, inds)
-        contour_gen_end = time.time()
         mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
         results_list = list(zip(bboxes_pred, labels_pred))
         bbox_results = [
             bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
             for det_bboxes, det_labels in results_list
         ]
-        post_end = time.time()
         return list(zip(bbox_results, mask_results))
 
-    def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred, img_meta, rescore=True):
+    def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
+                                    img_meta, rescore=True, iou_threthold=0.5):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
@@ -159,6 +156,8 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             contours_bboxes = torch.cat([contours_minp, contours_maxp], dim=-1)
             bboxes = bboxes_pred[..., :4]
             ious = bbox_overlaps(bboxes, contours_bboxes, is_aligned=True)
+            ious = (ious - iou_threthold) / (1 - iou_threthold)
+            ious = torch.clamp(ious, 0, 1)
             scores_pred = (ious * scores_pred) ** 0.5
             bboxes_pred[..., 4] *= 0
             bboxes_pred[..., 4] += scores_pred
