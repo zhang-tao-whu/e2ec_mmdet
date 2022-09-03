@@ -48,6 +48,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                  contour_proposal_head=None,
                  contour_evolve_head=None,
                  detector_fpn_start_level=1,
+                 contour_fpn_start_level=1,
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
@@ -61,6 +62,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         self.contour_proposal_head = build_head(contour_proposal_head)
         self.contour_evolve_head = build_head(contour_evolve_head)
         self.detector_fpn_start_level = detector_fpn_start_level
+        self.contour_fpn_start_level = contour_fpn_start_level
 
     # def forward_dummy(self, img):
     #     """Used for computing network flops.
@@ -104,9 +106,11 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x[self.detector_fpn_start_level:], img_metas, gt_bboxes,
                                               gt_labels, gt_bboxes_ignore)
-        losses_contour_proposal, contour_proposals, inds = self.contour_proposal_head.forward_train(x, img_metas,
-                                                                                              gt_bboxes, gt_contours)
-        losses_contour_evolve = self.contour_evolve_head.forward_train(x, img_metas, contour_proposals,
+        losses_contour_proposal, contour_proposals, inds = \
+            self.contour_proposal_head.forward_train(x[self.contour_fpn_start_level:],
+                                                       img_metas, gt_bboxes, gt_contours)
+        losses_contour_evolve = self.contour_evolve_head.forward_train(x[self.contour_fpn_start_level],
+                                                                       img_metas, contour_proposals,
                                                                        gt_contours, inds)
         losses.update(losses_contour_proposal)
         losses.update(losses_contour_evolve)
@@ -145,7 +149,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         return list(zip(bbox_results, mask_results))
 
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
-                                    img_meta, rescore=True, iou_threthold=0.5):
+                                    img_meta, rescore=True, iou_threthold=0.0):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]

@@ -6,6 +6,7 @@ _base_ = [
 model = dict(
     type='E2EC',
     detector_fpn_start_level=1, #start fron P3
+    contour_fpn_start_level=1,
     backbone=dict(
         type='ResNet',
         depth=50,
