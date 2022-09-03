@@ -47,6 +47,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                  bbox_head=None,
                  contour_proposal_head=None,
                  contour_evolve_head=None,
+                 detector_fpn_start_level=1,
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
@@ -59,6 +60,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         contour_evolve_head.update(test_cfg=test_cfg)
         self.contour_proposal_head = build_head(contour_proposal_head)
         self.contour_evolve_head = build_head(contour_evolve_head)
+        self.detector_fpn_start_level = detector_fpn_start_level
 
     # def forward_dummy(self, img):
     #     """Used for computing network flops.
@@ -100,7 +102,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         super(SingleStageDetector, self).forward_train(img, img_metas)
         gt_contours = gt_polys
         x = self.extract_feat(img)
-        losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
+        losses = self.bbox_head.forward_train(x[self.detector_fpn_start_level:], img_metas, gt_bboxes,
                                               gt_labels, gt_bboxes_ignore)
         losses_contour_proposal, contour_proposals, inds = self.contour_proposal_head.forward_train(x, img_metas,
                                                                                               gt_bboxes, gt_contours)
@@ -126,7 +128,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         """
         feat = self.extract_feat(img)
         results_list = self.bbox_head.simple_test(
-            feat, img_metas, rescale=rescale)
+            feat[self.detector_fpn_start_level:], img_metas, rescale=rescale)
         #results_list [(bboxes, labels), ...]
         # boxes (Tensor): Bboxes with score after nms, has shape (num_bboxes, 5). last dimension 5 arrange as (x1, y1, x2, y2, score)
         # labels (Tensor): has shape (num_bboxes, )
