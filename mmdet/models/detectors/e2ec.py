@@ -152,6 +152,9 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         time_dict['contour_evolve'] = now_time - time.time()
         now_time = time.time()
         mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
+        bboxes_pred = [item[1] for item in mask_results]
+        labels_pred = [item[2] for item in mask_results]
+        mask_results = [item[0] for item in mask_results]
         time_dict['post_contour2mask'] = now_time - time.time()
         now_time = time.time()
         results_list = list(zip(bboxes_pred, labels_pred))
@@ -170,24 +173,34 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             print(time_dict)
         return list(zip(bbox_results, mask_results))
 
-    def converge_components_single(self, contours_pred, labels_pred, bboxes_pred, bboxes_from='detection'):
+    def converge_components_single(self, contours_pred, labels_pred, bboxes_pred,
+                                   bboxes_from='detection', threthold=0.9):
         assert bboxes_from in ['detection', 'contour']
         if bboxes_from == 'contour':
             min_coords = torch.min(contours_pred, dim=1)[0]
             max_coords = torch.max(contours_pred, dim=1)[0]
             bboxes_pred = torch.cat([min_coords, max_coords], dim=1)
         iof = bbox_overlaps(bboxes_pred, bboxes_pred, is_aligned=False, mode='iof')
+        same_label = labels_pred.unsqueeze(1) - labels_pred.unsqueeze(0)
+        same_label = (same_label == 0).to(torch.float)
+        iof = iof * same_label
         npred = iof.size(0)
         # iof (n, n)
         component_rela = torch.range(npred, device=iof.device)
         iof[torch.range(npred), torch.range(npred)] = 0
-        return
+        max_iof, max_inds = torch.max(iof, dim=1)
+        replace = max_iof >= threthold
+        component_rela[replace] = max_inds[replace]
+        valid_idxs = component_rela[torch.logical_not(replace)]
+        return (valid_idxs, component_rela)
 
-    def converge_components(self, contours_pred, laels_pred, bboxes_pred):
-        return multi_apply()
+    def converge_components(self, contours_pred, laels_pred, bboxes_pred, bboxes_from='detection', threthold=0.9):
+        return multi_apply(self.converge_components_single, contours_pred, laels_pred, bboxes_pred,
+                           bboxes_from=bboxes_from, threthold=threthold)
 
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
-                                    img_meta, rescore=True, ignore_contour2mask=False, iou_threthold=0.0):
+                                    img_meta, rescore=True, converge_component=True,
+                                    ignore_contour2mask=False, iou_threthold=0.0):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
@@ -208,24 +221,41 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred = labels_pred.detach().cpu().numpy()
         if ignore_contour2mask:
-            return mask_pred
+            return (mask_pred, bboxes_pred, labels_pred)
+        if converge_component:
+            valid_idxs, comp_rela = self.converge_components_single(contours_pred, labels_pred,
+                                                                    bboxes_pred, bboxes_from='detection',
+                                                                    threthold=0.9)
         rles = []
-        for contour in contours_pred:
-            contour = contour.flatten().tolist()
-            rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
-            rles += rle
-        masks = maskUtils.decode(rles).transpose(2, 0, 1)
+        if not converge_component:
+            for contour in contours_pred:
+                contour = contour.flatten().tolist()
+                rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
+                rles += rle
+            masks = maskUtils.decode(rles).transpose(2, 0, 1)
+        else:
+            for idx in valid_idxs:
+                contours = []
+                for comp in contours_pred[comp_rela == idx]:
+                    contours.append(comp.flatten().tolist())
+                rle = maskUtils.frPyObjects(contours, ori_shape[0], ori_shape[1])
+                rles += maskUtils.merge(rle)
+            masks = maskUtils.decode(rles).transpose(2, 0, 1)
+            labels_pred = labels_pred[valid_idxs]
+            bboxes_pred = bboxes_pred[valid_idxs]
         for mask, label in zip(masks, labels_pred):
             mask_pred[int(label)].append(mask)
-        return mask_pred
+        return (mask_pred, bboxes_pred, labels_pred)
 
-    def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas, rescore=True, ignore_contour2mask=False):
+    def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas,
+                             rescore=True, converge_component=True, ignore_contour2mask=False):
         #masks_pred [single img masks_pred]
         #single img masks_pred [single class instances mask]
         #instance mask (h, w)
         return multi_apply(self.single_convert_contour2mask,
                            contours_preds, labels_preds, bboxes_pred,
-                           img_metas, rescore=rescore, ignore_contour2mask=ignore_contour2mask)
+                           img_metas, rescore=rescore, converge_component=converge_component,
+                           ignore_contour2mask=ignore_contour2mask)
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     """Test function with test time augmentation.
