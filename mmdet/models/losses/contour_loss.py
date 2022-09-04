@@ -59,7 +59,7 @@ class DMLoss(nn.Module):
         index_0 = index_0.unsqueeze(1).expand(index_gt.size(0), index_gt.size(1))
         targets = targets[index_0, index_gt, :]
         offsets_target = (targets - preds) / self.offsets_stride
-        return offsets, offsets_target
+        return offsets, offsets_target.detach()
 
     def get_pred_targets_item2(self, preds, offsets, key_points, masks):
         masks = masks.to(torch.bool)
@@ -71,7 +71,7 @@ class DMLoss(nn.Module):
         preds = preds[index_0, index_pred, :][masks]
         offsets = offsets[index_0, index_pred, :][masks]
         offsets_target = (key_points[masks] - preds) / self.offsets_stride
-        return offsets, offsets_target
+        return offsets, offsets_target.detach()
 
     def loss(self, pred, targets, weight, avg_factor=None):
         if self.crit_type == 'smoothL1':

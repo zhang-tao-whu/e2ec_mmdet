@@ -304,7 +304,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         num_poly = torch.tensor(
             len(pred_contour), dtype=torch.float, device=pred_contour.device)
         num_poly = max(reduce_mean(num_poly), 1.0)
-        num_key_points = torch.sum(key_points_mask)
+        num_key_points = torch.sum(key_points_mask).to(torch.float)
         num_key_points = max(reduce_mean(num_key_points), 1.0)
         avg_factor = (num_poly * self.point_nums * 2, num_key_points * 2)
         loss = self.loss_last_evolve(pred_contour, normed_pred_offsets, target_contour,
