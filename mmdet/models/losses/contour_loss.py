@@ -65,7 +65,7 @@ class DMLoss(nn.Module):
         masks = masks.to(torch.bool)
         distances = self.compute_distance(key_points, preds)
         #(N, n_key_points, n_pred_points)
-        index_pred = torch.min(distances, dim=2)[1]
+        index_pred = torch.min(distances, dim=1)[1]
         index_0 = torch.arange(index_pred.size(0))
         index_0 = index_0.unsqueeze(1).expand(index_pred.size(0), index_pred.size(1))
         preds = preds[index_0, index_pred, :][masks]
