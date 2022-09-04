@@ -117,7 +117,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         losses.update(losses_contour_evolve)
         return losses
 
-    def simple_test(self, img, img_metas, rescale=False):
+    def simple_test(self, img, img_metas, rescale=False, print_consumed_time=False):
         """Test function without test-time augmentation.
 
         Args:
@@ -131,22 +131,43 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                 The outer list corresponds to each image. The inner list
                 corresponds to each class.
         """
+        now_time = time.time()
+        time_dict = {}
         feat = self.extract_feat(img)
+        time_dict['backbone'] = now_time - time.time()
+        now_time = time.time()
         results_list = self.bbox_head.simple_test(
             feat[self.detector_fpn_start_level:], img_metas, rescale=rescale)
+        time_dict['detector'] = now_time - time.time()
+        now_time = time.time()
         #results_list [(bboxes, labels), ...]
         # boxes (Tensor): Bboxes with score after nms, has shape (num_bboxes, 5). last dimension 5 arrange as (x1, y1, x2, y2, score)
         # labels (Tensor): has shape (num_bboxes, )
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat[self.contour_fpn_start_level:], img_metas, bboxes_pred)
+        time_dict['contour_proposal'] = now_time - time.time()
+        now_time = time.time()
         contours_pred = self.contour_evolve_head.simple_test(feat[self.contour_fpn_start_level:], img_metas, contour_proposals, inds)
+        time_dict['contour_evolve'] = now_time - time.time()
+        now_time = time.time()
         mask_results = self.convert_contour2mask(contours_pred, labels_pred, bboxes_pred, img_metas)
+        time_dict['post_contour2mask'] = now_time - time.time()
+        now_time = time.time()
         results_list = list(zip(bboxes_pred, labels_pred))
         bbox_results = [
             bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
             for det_bboxes, det_labels in results_list
         ]
+        whole_time = 0
+        for key in time_dict.keys():
+            whole_time += time_dict[key]
+        time_dict['whole'] = whole_time
+        for key in time_dict.keys():
+            time_dict[key] /= time_dict['whole']
+        if print_consumed_time:
+            print(' ')
+            print(time_dict)
         return list(zip(bbox_results, mask_results))
 
     def converge_components_single(self, contours_pred, labels_pred, bboxes_pred, bboxes_from='detection'):
@@ -166,7 +187,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         return multi_apply()
 
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
-                                    img_meta, rescore=True, iou_threthold=0.0):
+                                    img_meta, rescore=True, ignore_contour2mask=False, iou_threthold=0.0):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
@@ -186,6 +207,8 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             bboxes_pred[..., 4] += scores_pred
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred = labels_pred.detach().cpu().numpy()
+        if ignore_contour2mask:
+            return mask_pred
         rles = []
         for contour in contours_pred:
             contour = contour.flatten().tolist()
@@ -196,13 +219,13 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             mask_pred[int(label)].append(mask)
         return mask_pred
 
-    def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas, rescore=True):
+    def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas, rescore=True, ignore_contour2mask=False):
         #masks_pred [single img masks_pred]
         #single img masks_pred [single class instances mask]
         #instance mask (h, w)
         return multi_apply(self.single_convert_contour2mask,
                            contours_preds, labels_preds, bboxes_pred,
-                           img_metas, rescore=rescore)
+                           img_metas, rescore=rescore, ignore_contour2mask=ignore_contour2mask)
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     """Test function with test time augmentation.

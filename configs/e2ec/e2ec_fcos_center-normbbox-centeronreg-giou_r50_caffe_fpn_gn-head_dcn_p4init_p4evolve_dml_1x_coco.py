@@ -21,7 +21,7 @@ model = dict(
         conv_bias=True,
         loss_bbox=dict(type='GIoULoss', loss_weight=1.0)),
     contour_evolve_head=dict(
-        loss_last=dict(
+        loss_last_evolve=dict(
             type='DMLoss',
             loss_weight=0.33,
             offsets_stride=4.,
