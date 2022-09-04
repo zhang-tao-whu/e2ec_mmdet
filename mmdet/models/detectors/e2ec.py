@@ -111,7 +111,8 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                                                        img_metas, gt_bboxes, gt_contours)
         losses_contour_evolve = self.contour_evolve_head.forward_train(x[self.contour_fpn_start_level:],
                                                                        img_metas, contour_proposals,
-                                                                       gt_contours, inds)
+                                                                       gt_contours, inds, key_points,
+                                                                       key_points_masks)
         losses.update(losses_contour_proposal)
         losses.update(losses_contour_evolve)
         return losses
@@ -147,6 +148,22 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             for det_bboxes, det_labels in results_list
         ]
         return list(zip(bbox_results, mask_results))
+
+    def converge_components_single(self, contours_pred, labels_pred, bboxes_pred, bboxes_from='detection'):
+        assert bboxes_from in ['detection', 'contour']
+        if bboxes_from == 'contour':
+            min_coords = torch.min(contours_pred, dim=1)[0]
+            max_coords = torch.max(contours_pred, dim=1)[0]
+            bboxes_pred = torch.cat([min_coords, max_coords], dim=1)
+        iof = bbox_overlaps(bboxes_pred, bboxes_pred, is_aligned=False, mode='iof')
+        npred = iof.size(0)
+        # iof (n, n)
+        component_rela = torch.range(npred, device=iof.device)
+        iof[torch.range(npred), torch.range(npred)] = 0
+        return
+
+    def converge_components(self, contours_pred, laels_pred, bboxes_pred):
+        return multi_apply()
 
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
                                     img_meta, rescore=True, iou_threthold=0.0):

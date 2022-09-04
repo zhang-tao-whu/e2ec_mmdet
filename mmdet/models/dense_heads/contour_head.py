@@ -240,6 +240,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                      type='SmoothL1Loss',
                      beta=0.25,
                      loss_weight=1.0),
+                 loss_last_evolve=None,
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
@@ -253,6 +254,10 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             evolve_gcn = Snake(state_dim=128, feature_dim=in_channel)
             self.__setattr__('evolve_gcn' + str(i), evolve_gcn)
         self.loss_contour = build_loss(loss_contour)
+        if loss_last_evolve is not None:
+            self.loss_last_evolve = build_loss(loss_last_evolve)
+        else:
+            self.loss_last_evolve = None
 
     def init_weights(self):
         super(BaseContourEvolveHead, self).init_weights()
@@ -294,6 +299,19 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             ret.update({'evolve_loss_' + str(i): loss})
         return ret
 
+    def loss_last(self, pred_contour, normed_pred_offsets, target_contour, key_points, key_points_mask):
+        ret = dict()
+        num_poly = torch.tensor(
+            len(pred_contour), dtype=torch.float, device=pred_contour.device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
+        num_key_points = torch.sum(key_points_mask)
+        num_key_points = max(reduce_mean(num_key_points), 1.0)
+        avg_factor = (num_poly * self.point_nums * 2, num_key_points * 2)
+        loss = self.loss_last_evolve(pred_contour, normed_pred_offsets, target_contour,
+                                     key_points, key_points_mask, avg_factor=avg_factor)
+        ret.update({'evolve_loss_last': loss})
+        return ret
+
     def get_targets(self, py_in, gt_contours):
         normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
         return normed_offset_target.detach()
@@ -304,6 +322,8 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                       contour_proposals,
                       gt_contours,
                       inds,
+                      key_points=None,
+                      key_points_masks=None,
                       **kwargs):
         """
         Args:
@@ -328,7 +348,13 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         for i in range(len(normed_offsets)):
             normed_offset_target = self.get_targets(output_contours[i], gt_contours)
             normed_offsets_targets.append(normed_offset_target)
-        losses = self.loss(normed_offsets, normed_offsets_targets)
+        if self.loss_last_evolve is None:
+            losses = self.loss(normed_offsets, normed_offsets_targets)
+        else:
+            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1])
+            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+                                         normed_offsets[-1], gt_contours, key_points,
+                                         key_points_masks))
         return losses
 
     def simple_test(self,
