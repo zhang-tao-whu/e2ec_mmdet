@@ -2,6 +2,10 @@
 import mmcv
 import torch
 import torch.nn as nn
+import numpy as np
+from torch.nn import functional as F
+from torch.autograd import Function
+import native_rasterizer
 
 from ..builder import LOSSES
 from .utils import weighted_loss
@@ -150,3 +154,136 @@ def l1_loss(pred, target):
     assert pred.size() == target.size()
     loss = torch.abs(pred - target)
     return loss
+
+
+MODE_BOUNDARY = "boundary"
+MODE_MASK = "mask"
+MODE_HARD_MASK = "hard_mask"
+
+MODE_MAPPING = {
+    MODE_BOUNDARY: 0,
+    MODE_MASK: 1,
+    MODE_HARD_MASK: 2
+}
+
+
+class SoftPolygonFunction(Function):
+    @staticmethod
+    def forward(ctx, vertices, width, height, inv_smoothness=1.0, mode=MODE_BOUNDARY):
+        ctx.width = width
+        ctx.height = height
+        ctx.inv_smoothness = inv_smoothness
+        ctx.mode = MODE_MAPPING[mode]
+
+        vertices = vertices.clone()
+        ctx.device = vertices.device
+        ctx.batch_size, ctx.number_vertices = vertices.shape[:2]
+
+        rasterized = torch.FloatTensor(ctx.batch_size, ctx.height, ctx.width).fill_(0.0).to(device=ctx.device)
+
+        contribution_map = torch.IntTensor(
+            ctx.batch_size,
+            ctx.height,
+            ctx.width).fill_(0).to(device=ctx.device)
+        rasterized, contribution_map = native_rasterizer.forward_rasterize(vertices, rasterized, contribution_map,
+                                                                           width, height, inv_smoothness, ctx.mode)
+        ctx.save_for_backward(vertices, rasterized, contribution_map)
+
+        return rasterized  # , contribution_map
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        vertices, rasterized, contribution_map = ctx.saved_tensors
+
+        grad_output = grad_output.contiguous()
+
+        # grad_vertices = torch.FloatTensor(
+        #    ctx.batch_size, ctx.height, ctx.width, ctx.number_vertices, 2).fill_(0.0).to(device=ctx.device)
+        grad_vertices = torch.FloatTensor(
+            ctx.batch_size, ctx.number_vertices, 2).fill_(0.0).to(device=ctx.device)
+        grad_vertices = native_rasterizer.backward_rasterize(
+            vertices, rasterized, contribution_map, grad_output, grad_vertices, ctx.width, ctx.height,
+            ctx.inv_smoothness, ctx.mode)
+
+        return grad_vertices, None, None, None, None
+
+
+class SoftPolygon(nn.Module):
+    MODES = [MODE_BOUNDARY, MODE_MASK, MODE_HARD_MASK]
+
+    def __init__(self, inv_smoothness=1.0, mode=MODE_BOUNDARY):
+        super(SoftPolygon, self).__init__()
+
+        self.inv_smoothness = inv_smoothness
+
+        if not (mode in SoftPolygon.MODES):
+            raise ValueError("invalid mode: {0}".format(mode))
+
+        self.mode = mode
+
+    def forward(self, vertices, width, height, p, color=False):
+        return SoftPolygonFunction.apply(vertices, width, height, self.inv_smoothness, self.mode)
+
+def dice_loss(input, target):
+    smooth = 1.
+
+    iflat = input.reshape(-1)
+    tflat = target.reshape(-1)
+    intersection = (iflat * tflat).sum()
+
+    return 1 - ((2. * intersection + smooth) /
+                (iflat.sum() + tflat.sum() + smooth))
+
+
+@LOSSES.register_module()
+class MaskRasterizationLoss(nn.Module):
+    def __init__(self, resolution=[64, 64], inv_smoothness=0.1):
+        super().__init__()
+        self.resolution = resolution
+        self.register_buffer("rasterize_at",
+                             torch.from_numpy(np.array(resolution).reshape(-1, 2)))
+        self.inv_smoothness = inv_smoothness
+        self.pred_rasterizer = SoftPolygon(inv_smoothness=self.inv_smoothness, mode="mask")
+        self.offset = 0.5
+        self.loss_fn = dice_loss
+        self.name = "mask"
+
+    def get_union_bboxes(self, pred_polygons, targets_bboxes):
+        pred_bboxes = torch.cat([torch.min(pred_polygons, dim=1)[0],
+                                 torch.min(pred_polygons)[0]], dim=-1)
+        pred_bboxes[..., :2] = torch.minimum(pred_bboxes[..., :2],
+                                             targets_bboxes[..., :2])
+        pred_bboxes[..., 2:4] = torch.maximum(pred_bboxes[..., 2:4],
+                                              targets_bboxes[..., 2:4])
+        return pred_bboxes
+
+    def crop_targets_masks(self, targets_masks, union_bboxes):
+        targets_masks = targets_masks.crop_and_resize(union_bboxes, self.resolution,
+                                                      np.arange(len(union_bboxes)),
+                                                      device=union_bboxes.device,
+                                                      interpolation='bilinear',
+                                                      binarize=True)
+        return targets_masks.to_tensor(dtype=torch.float32, device=union_bboxes.device)
+
+    def get_normed_polygons(self, polygons, bboxes):
+        bboxes = bboxes.detach()
+        polygons = (polygons - bboxes[..., :2].unsqueeze(1)) /\
+                   (bboxes[..., 2:4] - bboxes[..., :2]).unsqueeze(1)
+        return polygons
+
+    def forward(self, preds, targets_masks, targets_bboxes):
+        # targets_masks BitMasks
+        union_bboxes = self.get_union_bboxes(preds, targets_bboxes)
+        targets_masks = self.crop_targets_masks(targets_masks, union_bboxes)
+
+        batch_size = len(preds)
+        resolution = self.rasterize_at[0]
+
+        # -0.5 needed to align the rasterizer with COCO.
+        preds = self.get_normed_polygons(preds, union_bboxes)
+        pred_masks = self.pred_rasterizer(preds * float(resolution[1].item()) - self.offset,
+                                          resolution[1].item(),
+                                          resolution[0].item(), 1.0).unsqueeze(1)
+        # add a little noise since depending on inv_smoothness/predictions, we can exactly predict 0 or 1.0
+        pred_masks = torch.clamp(pred_masks, 0.00001, 0.99999)
+        return self.loss_fn(pred_masks, targets_masks)

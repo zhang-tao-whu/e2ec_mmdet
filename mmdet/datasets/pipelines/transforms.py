@@ -31,9 +31,13 @@ except ImportError:
 class AlignSampleBoundary:
     def __init__(self,
                  point_nums=128,
-                 reset_bbox=True):
+                 reset_bbox=True,
+                 ignore_multi_components_instances=False):
+        if ignore_multi_components_instances:
+            assert reset_bbox is False
         self.point_nums = point_nums
         self.reset_bbox = reset_bbox
+        self.ignore_multi_components_instances = ignore_multi_components_instances
         self.d = Douglas()
 
     def __call__(self, results):
@@ -42,11 +46,18 @@ class AlignSampleBoundary:
         gt_polys = gt_masks.masks
         height, width = gt_masks.height, gt_masks.width
         sampled_polys, keyPointsMask, key_points_list = [], [], []
+        is_single_component = []
         if self.reset_bbox:
             reset_bboxes = []
             reset_labels = []
 
         for gt_poly, label in zip(gt_polys, gt_labels):
+            if len(gt_poly) == 1:
+                is_single_component.append(1)
+                if self.ignore_multi_components_instances:
+                    continue
+            else:
+                is_single_component.append(0)
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
                 if len(poly) < 3:
@@ -64,6 +75,8 @@ class AlignSampleBoundary:
             results['gt_polys'] = np.stack(sampled_polys, axis=0)
             results['key_points_masks'] = np.stack(keyPointsMask, axis=0)
             results['key_points'] = np.stack(key_points_list, axis=0)
+            if self.ignore_multi_components_instances:
+                results['is_single_component'] = np.array(is_single_component)
             if self.reset_bbox:
                 results['gt_labels'] = np.stack(reset_labels, axis=0)
                 results['gt_bboxes'] = np.stack(reset_bboxes, axis=0)
@@ -71,6 +84,8 @@ class AlignSampleBoundary:
             results['gt_polys'] = np.zeros((0, 128, 2), dtype=np.float32)
             results['key_points_masks'] = np.zeros((0, 128, ), dtype=np.int64)
             results['key_points'] = np.zeros((0, 128, 2), dtype=np.float32)
+            if self.ignore_multi_components_instances:
+                results['is_single_component'] = np.zeros((0, ), dtype=np.int64)
             if self.reset_bbox:
                 results['gt_labels'] = np.zeros((0, ), dtype=np.int64)
                 results['gt_bboxes'] = np.zeros((0, 4), dtype=np.float32)

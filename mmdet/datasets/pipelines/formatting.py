@@ -333,7 +333,7 @@ class ContourDefaultFormatBundle:
             results['img'] = DC(
                 to_tensor(img), padding_value=self.pad_val['img'], stack=True)
         for key in ['proposals', 'gt_bboxes', 'gt_bboxes_ignore', 'gt_labels',
-                    'gt_polys', 'key_points_masks', 'key_points']:
+                    'gt_polys', 'key_points_masks', 'key_points', 'is_single_component']:
             if key not in results:
                 continue
             results[key] = DC(to_tensor(results[key]))
