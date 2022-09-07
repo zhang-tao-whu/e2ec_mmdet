@@ -72,6 +72,8 @@ class AlignSampleBoundary:
                 if succeed and self.reset_bbox:
                     reset_labels.append(label)
                     reset_bboxes.append(bbox)
+                if self.ignore_multi_components_instances and not succeed:
+                    is_single_component[-1] = 0
 
         if len(sampled_polys) != 0:
             results['gt_polys'] = np.stack(sampled_polys, axis=0)
