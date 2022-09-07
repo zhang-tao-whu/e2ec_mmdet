@@ -103,10 +103,6 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             dict[str, Tensor]: A dictionary of loss components.
         """
         super(SingleStageDetector, self).forward_train(img, img_metas)
-        if gt_masks is not None:
-            masks = [gt_mask.masks for gt_mask in gt_masks]
-            masks = np.concatenate(masks, axis=0)
-            gt_masks = BitmapMasks(masks, *masks.shape[1:])
         gt_contours = gt_polys
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x[self.detector_fpn_start_level:], img_metas, gt_bboxes,
