@@ -260,12 +260,17 @@ class MaskRasterizationLoss(nn.Module):
         return pred_bboxes
 
     def crop_targets_masks(self, targets_masks, union_bboxes):
-        targets_masks = targets_masks.crop_and_resize(union_bboxes, self.resolution,
-                                                      np.arange(len(union_bboxes)),
-                                                      device=union_bboxes.device,
-                                                      interpolation='bilinear',
-                                                      binarize=True)
-        return targets_masks.to_tensor(dtype=torch.float32, device=union_bboxes.device)
+        ret = []
+        sx = 0
+        for targets_mask in targets_masks:
+            ret.append(targets_mask.crop_and_resize(union_bboxes[sx: sx + len(targets_mask)], self.resolution,
+                                                    np.arange(len(targets_mask)),
+                                                    device=union_bboxes.device,
+                                                    interpolation='bilinear',
+                                                    binarize=True).to_tensor(dtype=torch.float32, device=union_bboxes.device))
+            sx += len(targets_mask)
+
+        return torch.cat(ret, dim=0)
 
     def get_normed_polygons(self, polygons, bboxes):
         bboxes = bboxes.detach()
