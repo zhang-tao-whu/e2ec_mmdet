@@ -63,6 +63,7 @@ class AlignSampleBoundary:
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
                 if len(poly) < 3:
+                    is_single_component[-1] = 0
                     continue
                 bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
                 h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]

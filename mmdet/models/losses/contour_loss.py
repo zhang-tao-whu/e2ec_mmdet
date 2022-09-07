@@ -78,6 +78,7 @@ class DMLoss(nn.Module):
         index_0 = index_0.unsqueeze(1).expand(index_pred.size(0), index_pred.size(1))
         preds = preds[index_0, index_pred, :][masks]
         offsets = offsets[index_0, index_pred, :][masks]
+        valid = valid[masks]
         offsets_target = (key_points[masks] - preds) / self.offsets_stride
         return offsets[valid], offsets_target.detach()[valid]
 
