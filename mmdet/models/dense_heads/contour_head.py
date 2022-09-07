@@ -151,10 +151,14 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
 
     def compute_contour_mask_losses(self, polys, gt_masks, gt_bboxes):
         ret = dict()
+        num_mask = torch.tensor(
+            len(gt_bboxes), dtype=torch.float, device=gt_bboxes.device)
+        num_mask = max(reduce_mean(num_mask), 1.0)
         for i, poly in enumerate(polys):
             ret.update({'proposal_loss_mask_{}'.format(i): self.loss_contour_mask(poly,
                                                                                   gt_masks,
-                                                                                  gt_bboxes)})
+                                                                                  gt_bboxes,
+                                                                                  avg_factor=num_mask)})
         return ret
 
     def loss(self, normed_init_offset_pred, normed_global_offset_pred,
@@ -359,9 +363,12 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
 
     def compute_loss_contour_mask(self, polys, gt_masks, gt_bboxes):
         ret = dict()
+        num_mask = torch.tensor(
+            len(gt_bboxes), dtype=torch.float, device=gt_bboxes.device)
+        num_mask = max(reduce_mean(num_mask), 1.0)
         for i, poly in enumerate(polys):
             ret.update({'evolve_loss_mask_{}'.format(i): \
-                        self.loss_contour_mask(poly, gt_masks, gt_bboxes)})
+                        self.loss_contour_mask(poly, gt_masks, gt_bboxes, avg_factor=num_mask)})
         return ret
 
     def get_targets(self, py_in, gt_contours, is_single_component=None):
