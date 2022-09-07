@@ -252,7 +252,7 @@ class MaskRasterizationLoss(nn.Module):
 
     def get_union_bboxes(self, pred_polygons, targets_bboxes):
         pred_bboxes = torch.cat([torch.min(pred_polygons, dim=1)[0],
-                                 torch.min(pred_polygons)[0]], dim=-1)
+                                 torch.max(pred_polygons, dim=1)[0]], dim=-1)
         pred_bboxes[..., :2] = torch.minimum(pred_bboxes[..., :2],
                                              targets_bboxes[..., :2])
         pred_bboxes[..., 2:4] = torch.maximum(pred_bboxes[..., 2:4],

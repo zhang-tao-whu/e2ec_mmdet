@@ -150,7 +150,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                     loss_coarse_contour=loss_coarse)
 
     def compute_contour_mask_losses(self, polys, gt_masks, gt_bboxes):
-        ret = ()
+        ret = dict()
         for i, poly in enumerate(polys):
             ret.update({'proposal_loss_mask_{}'.format(i): self.loss_contour_mask(poly,
                                                                                   gt_masks,
@@ -211,6 +211,9 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
         gt_contours = torch.cat(gt_contours, dim=0)
         is_single_component = torch.cat(is_single_component, dim=0)
+        print(gt_bboxes.size())
+        print(is_single_component.size())
+        print(gt_contours.size())
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
         if is_single_component is not None:
             is_single_component = is_single_component.to(torch.bool)
@@ -356,7 +359,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         return ret
 
     def compute_loss_contour_mask(self, polys, gt_masks, gt_bboxes):
-        ret = ()
+        ret = dict()
         for i, poly in enumerate(polys):
             ret.update({'evolve_loss_mask_{}'.format(i): \
                         self.loss_contour_mask(poly, gt_masks, gt_bboxes)})
