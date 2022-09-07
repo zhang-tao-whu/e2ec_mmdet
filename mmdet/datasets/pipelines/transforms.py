@@ -56,10 +56,10 @@ class AlignSampleBoundary:
         for gt_poly, label in zip(gt_polys, gt_labels):
             if len(gt_poly) == 1:
                 is_single_component.append(1)
-                if self.ignore_multi_components_instances:
-                    continue
             else:
                 is_single_component.append(0)
+                if self.ignore_multi_components_instances:
+                    continue
             for comp_poly in gt_poly:
                 poly = comp_poly.reshape(-1, 2).astype(np.float32)
                 if len(poly) < 3:
