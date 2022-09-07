@@ -62,6 +62,7 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                      type='SmoothL1Loss',
                      beta=0.1,
                      loss_weight=0.1),
+                 loss_contour_mask=None,
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
@@ -86,6 +87,10 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
 
         self.loss_contour = build_loss(loss_contour)
         self.loss_init = build_loss(loss_init)
+        if loss_contour_mask is None:
+            self.loss_contour_mask = None
+        else:
+            self.loss_contour_mask = build_loss(loss_contour_mask)
 
     def init_fc(self, fc):
         if isinstance(fc, nn.Conv2d):
@@ -128,13 +133,12 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         normed_instance_global_offset = self.linear2(instance_global_deform_features).reshape(centers.size(0),
                                                                                               self.point_nums, 2)
         instance_global_offset = normed_instance_global_offset * self.global_deform_stride
-        coarse_contour = instance_global_offset + contour_proposals
+        coarse_contour = instance_global_offset + contour_proposals.detach()
 
         return contour_proposals, coarse_contour, normed_instance_shape_embed, normed_instance_global_offset
 
-    def loss(self, normed_init_offset_pred, normed_global_offset_pred,
-             normed_init_offset_target, normed_global_offset_target):
-        """Compute losses of the head."""
+    def compute_contour_losses(self, normed_init_offset_pred, normed_global_offset_pred,
+                               normed_init_offset_target, normed_global_offset_target):
         num_poly = torch.tensor(
             len(normed_init_offset_target), dtype=torch.float, device=normed_init_offset_pred.device)
         num_poly = max(reduce_mean(num_poly), 1.0)
@@ -145,7 +149,34 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         return dict(loss_init_contour=loss_init,
                     loss_coarse_contour=loss_coarse)
 
-    def get_targets(self, gt_contours, gt_centers, contour_proposals):
+    def compute_contour_mask_losses(self, polys, gt_masks, gt_bboxes):
+        ret = ()
+        for i, poly in enumerate(polys):
+            ret.update({'proposal_loss_mask_{}'.format(i): self.loss_contour_mask(poly,
+                                                                                  gt_masks,
+                                                                                  gt_bboxes)})
+        return ret
+
+    def loss(self, normed_init_offset_pred, normed_global_offset_pred,
+             normed_init_offset_target, normed_global_offset_target,
+             contour_proposals, contour_coarse, gt_bboxes=None,
+             gt_masks=None, is_single_component=None):
+        """Compute losses of the head."""
+        ret = dict()
+        if is_single_component is not None:
+            normed_init_offset_pred = normed_init_offset_pred[is_single_component]
+            normed_global_offset_pred = normed_global_offset_pred[is_single_component]
+        ret.update(self.compute_contour_losses(normed_init_offset_pred, normed_global_offset_pred,
+                                               normed_init_offset_target, normed_global_offset_target))
+        if self.loss_contour_mask is not None:
+            ret.update(self.compute_contour_mask_losses([contour_proposals, contour_coarse],
+                                                        gt_masks, gt_bboxes))
+        return ret
+
+    def get_targets(self, gt_contours, gt_centers, contour_proposals, is_single_component=None):
+        if is_single_component is not None:
+            gt_centers = gt_centers[is_single_component]
+            contour_proposals = contour_proposals[is_single_component]
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums, 1)
         normed_init_offset_target = (gt_contours - gt_centers) / self.init_stride
         normed_global_offset_target = (gt_contours - contour_proposals) / self.global_deform_stride
@@ -156,6 +187,8 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                       img_metas,
                       gt_bboxes,
                       gt_contours,
+                      gt_masks=None,
+                      is_single_component=None,
                       **kwargs):
         """
         Args:
@@ -178,13 +211,17 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
         gt_contours = torch.cat(gt_contours, dim=0)
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
-
+        if is_single_component is not None:
+            is_single_component = is_single_component.to(torch.bool)
         contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(x, gt_centers,
                                                                                            img_h, img_w, inds)
         normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers,
-                                                                                  contour_proposals)
+                                                                                  contour_proposals,
+                                                                                  is_single_component)
         losses = self.loss(normed_init_offset, normed_global_offset,
-                           normed_init_offset_target, normed_global_offset_target)
+                           normed_init_offset_target, normed_global_offset_target,
+                           contour_proposals, coarse_contour, gt_bboxes,
+                           gt_masks, is_single_component)
         return losses, coarse_contour, inds
 
     def convert_single_imagebboxes2featurebboxes(self, bboxes_, img_meta):
@@ -240,6 +277,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                      type='SmoothL1Loss',
                      beta=0.25,
                      loss_weight=1.0),
+                 loss_contour_mask=None,
                  loss_last_evolve=None,
                  init_cfg=None,
                  train_cfg=None,
@@ -258,6 +296,10 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             self.loss_last_evolve = build_loss(loss_last_evolve)
         else:
             self.loss_last_evolve = None
+        if loss_contour_mask is not None:
+            self.loss_contour_mask = build_loss(loss_contour_mask)
+        else:
+            self.loss_contour_mask = None
 
     def init_weights(self):
         super(BaseContourEvolveHead, self).init_weights()
@@ -282,7 +324,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
             offset = normed_offset * self.evolve_deform_stride
-            py_out = py_in + offset
+            py_out = py_in.detach() + offset
             outputs_contours.append(py_out)
             normed_offsets.append(normed_offset)
         assert len(outputs_contours) == len(normed_offsets) + 1
@@ -312,7 +354,16 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         ret.update({'evolve_loss_last': loss})
         return ret
 
-    def get_targets(self, py_in, gt_contours):
+    def compute_loss_contour_mask(self, polys, gt_masks, gt_bboxes):
+        ret = ()
+        for i, poly in enumerate(polys):
+            ret.update({'evolve_loss_mask_{}'.format(i): \
+                        self.loss_contour_mask(poly, gt_masks, gt_bboxes)})
+        return ret
+
+    def get_targets(self, py_in, gt_contours, is_single_component=None):
+        if is_single_component is not None:
+            py_in = py_in[is_single_component]
         normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
         return normed_offset_target.detach()
 
@@ -324,6 +375,9 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                       inds,
                       key_points=None,
                       key_points_masks=None,
+                      gt_bboxes=None,
+                      gt_masks=None,
+                      is_single_component=None,
                       **kwargs):
         """
         Args:
@@ -343,13 +397,17 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
         gt_contours = torch.cat(gt_contours, dim=0)
+        gt_bboxes = torch.cat(gt_bboxes, dim=0)
         output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
         for i in range(len(normed_offsets)):
-            normed_offset_target = self.get_targets(output_contours[i], gt_contours)
+            normed_offset_target = self.get_targets(output_contours[i], gt_contours, is_single_component)
             normed_offsets_targets.append(normed_offset_target)
         if self.loss_last_evolve is None:
             losses = self.loss(normed_offsets, normed_offsets_targets)
+            if self.loss_contour_mask is not None:
+                losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                                                             gt_masks, gt_bboxes))
         else:
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
@@ -357,6 +415,9 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
                                          key_points_masks))
+            if self.loss_contour_mask is not None:
+                losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                                                             gt_masks, gt_bboxes))
         return losses
 
     def simple_test(self,

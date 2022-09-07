@@ -82,6 +82,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                       gt_masks=None,
                       key_points=None,
                       key_points_masks=None,
+                      is_single_component=None,
                       gt_bboxes_ignore=None):
         """
         Args:
@@ -108,11 +109,13 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
                                               gt_labels, gt_bboxes_ignore)
         losses_contour_proposal, contour_proposals, inds = \
             self.contour_proposal_head.forward_train(x[self.contour_fpn_start_level:],
-                                                       img_metas, gt_bboxes, gt_contours)
+                                                     img_metas, gt_bboxes, gt_contours,
+                                                     gt_masks, is_single_component)
         losses_contour_evolve = self.contour_evolve_head.forward_train(x[self.contour_fpn_start_level:],
                                                                        img_metas, contour_proposals,
                                                                        gt_contours, inds, key_points,
-                                                                       key_points_masks)
+                                                                       key_points_masks, gt_bboxes,
+                                                                       gt_masks, is_single_component)
         losses.update(losses_contour_proposal)
         losses.update(losses_contour_evolve)
         return losses
@@ -173,38 +176,9 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             print(time_dict)
         return list(zip(bbox_results, mask_results))
 
-    def converge_components_single(self, contours_pred, labels_pred, bboxes_pred,
-                                   bboxes_from='detection', threthold=0.9):
-        assert bboxes_from in ['detection', 'contour']
-        scores_pred = bboxes_pred[..., 4:]
-        bboxes_pred = bboxes_pred[..., :4]
-        if bboxes_from == 'contour':
-            min_coords = torch.min(contours_pred, dim=1)[0]
-            max_coords = torch.max(contours_pred, dim=1)[0]
-            bboxes_pred = torch.cat([min_coords, max_coords], dim=1)
-        iof = bbox_overlaps(bboxes_pred, bboxes_pred, is_aligned=False, mode='iof')
-        same_label = labels_pred.unsqueeze(1) - labels_pred.unsqueeze(0)
-        same_label = (same_label == 0).to(torch.float)
-        large_score = scores_pred - scores_pred.transpose(0, 1)
-        large_score = (large_score <= 0).to(torch.float)
-        iof = iof * same_label * large_score
-        npred = iof.size(0)
-        # iof (n, n)
-        component_rela = torch.arange(npred, device=iof.device)
-        iof[component_rela, component_rela] = 0
-        max_iof, max_inds = torch.max(iof, dim=1)
-        replace = max_iof >= threthold
-        component_rela[replace] = max_inds[replace]
-        valid_idxs = component_rela[torch.logical_not(replace)]
-        return (valid_idxs.detach().cpu().numpy(), component_rela.detach().cpu().numpy())
-
-    def converge_components(self, contours_pred, laels_pred, bboxes_pred, bboxes_from='detection', threthold=0.9):
-        return multi_apply(self.converge_components_single, contours_pred, laels_pred, bboxes_pred,
-                           bboxes_from=bboxes_from, threthold=threthold)
-
     def single_convert_contour2mask(self, contours_pred, labels_pred, bboxes_pred,
-                                    img_meta, rescore=True, converge_component=True,
-                                    ignore_contour2mask=False, iou_threthold=0.0):
+                                    img_meta, rescore=True, ignore_contour2mask=False,
+                                    iou_threthold=0.0):
         img_shape = img_meta['img_shape'][:2]
         ori_shape = img_meta['ori_shape'][:2]
         mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
@@ -226,43 +200,27 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             contours_pred = contours_pred.detach().cpu().numpy()
             #labels_pred = labels_pred.detach().cpu().numpy()
             return (mask_pred, bboxes_pred, labels_pred)
-        if converge_component:
-            valid_idxs, comp_rela = self.converge_components_single(contours_pred, labels_pred,
-                                                                    bboxes_pred, bboxes_from='detection',
-                                                                    threthold=0.9)
         contours_pred = contours_pred.detach().cpu().numpy()
         labels_pred_ret = labels_pred
         labels_pred = labels_pred.detach().cpu().numpy()
         rles = []
-        if not converge_component:
-            for contour in contours_pred:
-                contour = contour.flatten().tolist()
-                rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
-                rles += rle
-            masks = maskUtils.decode(rles).transpose(2, 0, 1)
-        else:
-            for idx in valid_idxs:
-                contours = []
-                for comp in contours_pred[comp_rela == idx]:
-                    contours.append(comp.flatten().tolist())
-                rle = maskUtils.frPyObjects(contours, ori_shape[0], ori_shape[1])
-                rles.append(maskUtils.merge(rle))
-            masks = maskUtils.decode(rles).transpose(2, 0, 1)
-            labels_pred = labels_pred[valid_idxs]
-            labels_pred_ret = labels_pred_ret[valid_idxs]
-            bboxes_pred = bboxes_pred[valid_idxs]
+        for contour in contours_pred:
+            contour = contour.flatten().tolist()
+            rle = maskUtils.frPyObjects([contour], ori_shape[0], ori_shape[1])
+            rles += rle
+        masks = maskUtils.decode(rles).transpose(2, 0, 1)
         for mask, label in zip(masks, labels_pred):
             mask_pred[int(label)].append(mask)
         return (mask_pred, bboxes_pred, labels_pred_ret)
 
     def convert_contour2mask(self, contours_preds, labels_preds, bboxes_pred, img_metas,
-                             rescore=True, converge_component=False, ignore_contour2mask=False):
+                             rescore=True, ignore_contour2mask=False):
         #masks_pred [single img masks_pred]
         #single img masks_pred [single class instances mask]
         #instance mask (h, w)
         return multi_apply(self.single_convert_contour2mask,
                            contours_preds, labels_preds, bboxes_pred,
-                           img_metas, rescore=rescore, converge_component=converge_component,
+                           img_metas, rescore=rescore,
                            ignore_contour2mask=ignore_contour2mask)
 
     # def aug_test(self, imgs, img_metas, rescale=False):

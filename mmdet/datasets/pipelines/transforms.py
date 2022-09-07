@@ -32,12 +32,14 @@ class AlignSampleBoundary:
     def __init__(self,
                  point_nums=128,
                  reset_bbox=True,
-                 ignore_multi_components_instances=False):
+                 ignore_multi_components_instances=False,
+                 gt_masks2bit=False):
         if ignore_multi_components_instances:
             assert reset_bbox is False
         self.point_nums = point_nums
         self.reset_bbox = reset_bbox
         self.ignore_multi_components_instances = ignore_multi_components_instances
+        self.gt_masks2bit = gt_masks2bit
         self.d = Douglas()
 
     def __call__(self, results):
@@ -89,6 +91,8 @@ class AlignSampleBoundary:
             if self.reset_bbox:
                 results['gt_labels'] = np.zeros((0, ), dtype=np.int64)
                 results['gt_bboxes'] = np.zeros((0, 4), dtype=np.float32)
+        if self.gt_masks2bit:
+            results['gt_masks'] = results['gt_masks'].to_bitmap()
         return results
 
     def ignore_poly(self, idxs):

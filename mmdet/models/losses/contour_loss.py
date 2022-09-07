@@ -224,20 +224,21 @@ class SoftPolygon(nn.Module):
     def forward(self, vertices, width, height, p, color=False):
         return SoftPolygonFunction.apply(vertices, width, height, self.inv_smoothness, self.mode)
 
-def dice_loss(input, target):
+def dice_loss(input, target, avg_factor=None):
+    n = input.size(0)
     smooth = 1.
-
-    iflat = input.reshape(-1)
-    tflat = target.reshape(-1)
-    intersection = (iflat * tflat).sum()
-
-    return 1 - ((2. * intersection + smooth) /
-                (iflat.sum() + tflat.sum() + smooth))
-
+    iflat = input.reshape(n, -1)
+    tflat = target.reshape(n, -1)
+    intersection = (iflat * tflat).sum(dim=-1)
+    losses = 1 - ((2. * intersection + smooth) / (iflat.sum(dim=-1) + tflat.sum(dim=-1) + smooth))
+    if avg_factor is None:
+        return losses.sum() / n
+    else:
+        return losses.sum() / avg_factor
 
 @LOSSES.register_module()
 class MaskRasterizationLoss(nn.Module):
-    def __init__(self, resolution=[64, 64], inv_smoothness=0.1):
+    def __init__(self, loss_weight=1.0, resolution=[64, 64], inv_smoothness=0.1):
         super().__init__()
         self.resolution = resolution
         self.register_buffer("rasterize_at",
@@ -247,6 +248,7 @@ class MaskRasterizationLoss(nn.Module):
         self.offset = 0.5
         self.loss_fn = dice_loss
         self.name = "mask"
+        self.loss_weight = loss_weight
 
     def get_union_bboxes(self, pred_polygons, targets_bboxes):
         pred_bboxes = torch.cat([torch.min(pred_polygons, dim=1)[0],
@@ -271,12 +273,14 @@ class MaskRasterizationLoss(nn.Module):
                    (bboxes[..., 2:4] - bboxes[..., :2]).unsqueeze(1)
         return polygons
 
-    def forward(self, preds, targets_masks, targets_bboxes):
+    def forward(self, preds, targets_masks, targets_bboxes, avg_factor=None):
         # targets_masks BitMasks
+        batch_size = len(preds)
+        if batch_size == 0:
+            return preds.sum() * 0
         union_bboxes = self.get_union_bboxes(preds, targets_bboxes)
         targets_masks = self.crop_targets_masks(targets_masks, union_bboxes)
 
-        batch_size = len(preds)
         resolution = self.rasterize_at[0]
 
         # -0.5 needed to align the rasterizer with COCO.
@@ -286,4 +290,4 @@ class MaskRasterizationLoss(nn.Module):
                                           resolution[0].item(), 1.0).unsqueeze(1)
         # add a little noise since depending on inv_smoothness/predictions, we can exactly predict 0 or 1.0
         pred_masks = torch.clamp(pred_masks, 0.00001, 0.99999)
-        return self.loss_fn(pred_masks, targets_masks)
+        return self.loss_fn(pred_masks, targets_masks, avg_factor=avg_factor) * self.loss_weight
