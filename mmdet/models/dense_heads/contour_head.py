@@ -210,13 +210,13 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         inds = torch.cat([torch.full([len(gt_bboxes[i])], i) for i in range(len(gt_bboxes))], dim=0).to(x[0].device)
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
         gt_contours = torch.cat(gt_contours, dim=0)
-        is_single_component = torch.cat(is_single_component, dim=0)
+        if is_single_component is not None:
+            is_single_component = torch.cat(is_single_component, dim=0)
+            is_single_component = is_single_component.to(torch.bool)
         print(gt_bboxes.size())
         print(is_single_component.size())
         print(gt_contours.size())
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
-        if is_single_component is not None:
-            is_single_component = is_single_component.to(torch.bool)
         contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(x, gt_centers,
                                                                                            img_h, img_w, inds)
         normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers,
@@ -402,7 +402,9 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         img_h, img_w = img_metas[0]['batch_input_shape']
         gt_contours = torch.cat(gt_contours, dim=0)
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
-        is_single_component = torch.cat(is_single_component, dim=0)
+        if is_single_component is not None:
+            is_single_component = torch.cat(is_single_component, dim=0)
+            is_single_component = is_single_component.to(torch.bool)
         output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
         for i in range(len(normed_offsets)):

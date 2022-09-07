@@ -4,7 +4,7 @@ from .single_stage import SingleStageDetector
 import warnings
 import numpy as np
 import torch
-
+from mmdet.core import BitmapMasks
 from mmdet.core import bbox2result
 from mmdet.core.bbox.iou_calculators import bbox_overlaps
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
@@ -103,6 +103,10 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
             dict[str, Tensor]: A dictionary of loss components.
         """
         super(SingleStageDetector, self).forward_train(img, img_metas)
+        if gt_masks is not None:
+            masks = [gt_mask.masks for gt_mask in gt_masks]
+            masks = np.concatenate(masks, axis=0)
+            gt_masks = BitmapMasks(masks, *masks.shape[1:])
         gt_contours = gt_polys
         x = self.extract_feat(img)
         losses = self.bbox_head.forward_train(x[self.detector_fpn_start_level:], img_metas, gt_bboxes,
