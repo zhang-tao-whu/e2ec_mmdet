@@ -21,12 +21,14 @@ class DMLoss(nn.Module):
     """
 
     def __init__(self, loss_weight=1.0, offsets_stride=4.,
-                 key_item_weight=0.5, crit_type='smoothL1'):
+                 key_item_weight=0.5, crit_type='smoothL1',
+                 ignore_bound=10.):
         super(DMLoss, self).__init__()
         self.key_item_weight = key_item_weight
         self.loss_weight = loss_weight
         self.offsets_stride = offsets_stride
         self.crit_type = crit_type
+        self.ignore_bound = ignore_bound
         assert crit_type in ['smoothL1', 'L1']
         if crit_type == 'smoothL1':
             self.crit = smooth_l1_loss
@@ -58,24 +60,26 @@ class DMLoss(nn.Module):
     def get_pred_targets_item1(self, preds, offsets, targets):
         targets = self.interpolation(targets)
         distances = self.compute_distance(preds, targets)
-        index_gt = torch.min(distances, dim=1)[1]
+        matched_dis, index_gt = torch.min(distances, dim=1)
+        valid = matched_dis <= self.ignore_bound
         index_0 = torch.arange(index_gt.size(0))
         index_0 = index_0.unsqueeze(1).expand(index_gt.size(0), index_gt.size(1))
         targets = targets[index_0, index_gt, :]
         offsets_target = (targets - preds) / self.offsets_stride
-        return offsets, offsets_target.detach()
+        return offsets[valid], offsets_target.detach()[valid]
 
     def get_pred_targets_item2(self, preds, offsets, key_points, masks):
         masks = masks.to(torch.bool)
         distances = self.compute_distance(key_points, preds)
         #(N, n_key_points, n_pred_points)
-        index_pred = torch.min(distances, dim=1)[1]
+        matched_dis, index_pred = torch.min(distances, dim=1)
+        valid = matched_dis <= self.ignore_bound
         index_0 = torch.arange(index_pred.size(0))
         index_0 = index_0.unsqueeze(1).expand(index_pred.size(0), index_pred.size(1))
         preds = preds[index_0, index_pred, :][masks]
         offsets = offsets[index_0, index_pred, :][masks]
         offsets_target = (key_points[masks] - preds) / self.offsets_stride
-        return offsets, offsets_target.detach()
+        return offsets[valid], offsets_target.detach()[valid]
 
     def loss(self, pred, targets, weight, avg_factor=None):
         if self.crit_type == 'smoothL1':
