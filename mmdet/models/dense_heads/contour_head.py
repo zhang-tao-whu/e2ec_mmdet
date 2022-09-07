@@ -213,9 +213,6 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
         if is_single_component is not None:
             is_single_component = torch.cat(is_single_component, dim=0)
             is_single_component = is_single_component.to(torch.bool)
-        print(gt_bboxes.size())
-        print(is_single_component.size())
-        print(gt_contours.size())
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
         contour_proposals, coarse_contour, normed_init_offset, normed_global_offset = self(x, gt_centers,
                                                                                            img_h, img_w, inds)
@@ -334,18 +331,20 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         assert len(outputs_contours) == len(normed_offsets) + 1
         return outputs_contours, normed_offsets
 
-    def loss(self, normed_offsets_preds, normed_offsets_targets):
+    def loss(self, normed_offsets_preds, normed_offsets_targets, is_single_component=None):
         """Compute losses of the head."""
         ret = dict()
         num_poly = torch.tensor(
             len(normed_offsets_targets[0]), dtype=torch.float, device=normed_offsets_preds[0].device)
         num_poly = max(reduce_mean(num_poly), 1.0)
         for i, (offsets_preds, offsets_targets) in enumerate(zip(normed_offsets_preds, normed_offsets_targets)):
+            if is_single_component is not None:
+                offsets_preds = offsets_preds[is_single_component]
             loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums * 2)
             ret.update({'evolve_loss_' + str(i): loss})
         return ret
 
-    def loss_last(self, pred_contour, normed_pred_offsets, target_contour, key_points, key_points_mask):
+    def loss_last(self, pred_contour, normed_pred_offsets, target_contour, key_points, key_points_mask, is_single_component=None):
         ret = dict()
         num_poly = torch.tensor(
             len(pred_contour), dtype=torch.float, device=pred_contour.device)
@@ -353,7 +352,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         num_key_points = torch.sum(key_points_mask).to(torch.float)
         num_key_points = max(reduce_mean(num_key_points), 1.0)
         avg_factor = (num_poly * self.point_nums * 2, num_key_points * 2)
-        loss = self.loss_last_evolve(pred_contour, normed_pred_offsets, target_contour,
+        loss = self.loss_last_evolve(pred_contour[is_single_component], normed_pred_offsets[is_single_component], target_contour,
                                      key_points, key_points_mask, avg_factor=avg_factor)
         ret.update({'evolve_loss_last': loss})
         return ret
@@ -411,17 +410,17 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             normed_offset_target = self.get_targets(output_contours[i], gt_contours, is_single_component)
             normed_offsets_targets.append(normed_offset_target)
         if self.loss_last_evolve is None:
-            losses = self.loss(normed_offsets, normed_offsets_targets)
+            losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
             if self.loss_contour_mask is not None:
                 losses.update(self.compute_loss_contour_mask(output_contours[1:],
                                                              gt_masks, gt_bboxes))
         else:
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
-            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1])
+            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1], is_single_component)
             losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
-                                         key_points_masks))
+                                         key_points_masks, is_single_component))
             if self.loss_contour_mask is not None:
                 losses.update(self.compute_loss_contour_mask(output_contours[1:],
                                                              gt_masks, gt_bboxes))

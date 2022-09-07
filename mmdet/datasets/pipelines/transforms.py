@@ -74,13 +74,12 @@ class AlignSampleBoundary:
                     reset_bboxes.append(bbox)
                 if self.ignore_multi_components_instances and not succeed:
                     is_single_component[-1] = 0
-
+        if self.ignore_multi_components_instances:
+            results['is_single_component'] = np.array(is_single_component, dtype=np.int64)
         if len(sampled_polys) != 0:
             results['gt_polys'] = np.stack(sampled_polys, axis=0)
             results['key_points_masks'] = np.stack(keyPointsMask, axis=0)
             results['key_points'] = np.stack(key_points_list, axis=0)
-            if self.ignore_multi_components_instances:
-                results['is_single_component'] = np.array(is_single_component)
             if self.reset_bbox:
                 results['gt_labels'] = np.stack(reset_labels, axis=0)
                 results['gt_bboxes'] = np.stack(reset_bboxes, axis=0)
@@ -88,8 +87,6 @@ class AlignSampleBoundary:
             results['gt_polys'] = np.zeros((0, 128, 2), dtype=np.float32)
             results['key_points_masks'] = np.zeros((0, 128, ), dtype=np.int64)
             results['key_points'] = np.zeros((0, 128, 2), dtype=np.float32)
-            if self.ignore_multi_components_instances:
-                results['is_single_component'] = np.zeros((0, ), dtype=np.int64)
             if self.reset_bbox:
                 results['gt_labels'] = np.zeros((0, ), dtype=np.int64)
                 results['gt_bboxes'] = np.zeros((0, 4), dtype=np.float32)
