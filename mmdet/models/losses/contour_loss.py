@@ -61,7 +61,7 @@ class DMLoss(nn.Module):
         targets = self.interpolation(targets)
         distances = self.compute_distance(preds, targets)
         matched_dis, index_gt = torch.min(distances, dim=1)
-        valid = matched_dis <= self.ignore_bound
+        valid = matched_dis <= self.ignore_bound ** 2
         index_0 = torch.arange(index_gt.size(0))
         index_0 = index_0.unsqueeze(1).expand(index_gt.size(0), index_gt.size(1))
         targets = targets[index_0, index_gt, :]
@@ -73,7 +73,7 @@ class DMLoss(nn.Module):
         distances = self.compute_distance(key_points, preds)
         #(N, n_key_points, n_pred_points)
         matched_dis, index_pred = torch.min(distances, dim=1)
-        valid = matched_dis <= self.ignore_bound
+        valid = matched_dis <= self.ignore_bound ** 2
         index_0 = torch.arange(index_pred.size(0))
         index_0 = index_0.unsqueeze(1).expand(index_pred.size(0), index_pred.size(1))
         preds = preds[index_0, index_pred, :][masks]

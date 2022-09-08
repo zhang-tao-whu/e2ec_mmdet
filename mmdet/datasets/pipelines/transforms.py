@@ -68,6 +68,7 @@ class AlignSampleBoundary:
                 bbox = np.concatenate([np.min(poly, axis=0), np.max(poly, axis=0)], axis=0)
                 h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]
                 if h <= 1 or w <= 1:
+                    is_single_component[-1] = 0
                     continue
                 succeed = self.prepare_evolution(poly, sampled_polys, keyPointsMask, key_points_list)
                 if succeed and self.reset_bbox:
