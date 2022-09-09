@@ -293,8 +293,9 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
+                 **kwarg
                  ):
-        super(BaseContourProposalHead, self).__init__(init_cfg)
+        super(FPNContourProposalHead, self).__init__(init_cfg)
         self.point_nums = point_nums
         self.strides = strides
         self.regress_ranges = regress_ranges
