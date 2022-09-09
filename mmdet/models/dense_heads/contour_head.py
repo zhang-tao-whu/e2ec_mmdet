@@ -275,6 +275,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
     def __init__(self,
                  in_channel=256,
                  hidden_dim=256,
+                 start_level=0,
                  regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
                                  (512, 1e6)),
                  strides=[8, 16, 32, 64, 128],
@@ -298,6 +299,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
         self.strides = strides
         self.regress_ranges = regress_ranges
         self.use_tanh = use_tanh
+        self.start_level = start_level
         #init component
         self.init_predictor = nn.ModuleList(nn.Linear(in_channel, hidden_dim, bias=True),
                                             nn.ReLU(inplace=True),
@@ -458,6 +460,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                 losses: (dict[str, Tensor]): A dictionary of loss components.
                 proposal_list (list[Tensor]): Proposals of each image.
         """
+        x = x[self.start_level:]
         img_h, img_w = img_metas[0]['batch_input_shape']
         inds = torch.cat([torch.full([len(gt_bboxes[i])], i) for i in range(len(gt_bboxes))], dim=0).to(x[0].device)
         gt_bboxes = torch.cat(gt_bboxes, dim=0)
@@ -506,6 +509,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                 The shape of the second tensor in the tuple is ``labels``
                 with shape (n, ).
         """
+        feats = feats[self.start_level:]
         img_h, img_w = img_metas[0]['batch_input_shape']
         inds = torch.cat([torch.full([len(pred_bboxes[i])], i) for i in range(len(pred_bboxes))], dim=0).to(feats[0].device)
         pred_bboxes = self.convert_imagebboxes2featurebboxes(pred_bboxes, img_metas)
