@@ -22,7 +22,7 @@ class DMLoss(nn.Module):
 
     def __init__(self, loss_weight=1.0, offsets_stride=4.,
                  key_item_weight=0.5, crit_type='smoothL1',
-                 ignore_bound=10.):
+                 ignore_bound=1000.):
         super(DMLoss, self).__init__()
         self.key_item_weight = key_item_weight
         self.loss_weight = loss_weight

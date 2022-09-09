@@ -268,6 +268,255 @@ class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
                                                                                            img_w, inds)
         return coarse_contour, inds
 
+@HEADS.register_module()
+class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
+    """Base class for DenseHeads."""
+
+    def __init__(self,
+                 in_channel=256,
+                 hidden_dim=256,
+                 regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
+                                 (512, 1e6)),
+                 strides=[8, 16, 32, 64, 128],
+                 point_nums=128,
+                 use_tanh=[True, True],
+                 loss_init=dict(
+                     type='SmoothL1Loss',
+                     beta=0.1,
+                     loss_weight=0.2),
+                 loss_contour=dict(
+                     type='SmoothL1Loss',
+                     beta=0.1,
+                     loss_weight=0.1),
+                 loss_contour_mask=None,
+                 init_cfg=None,
+                 train_cfg=None,
+                 test_cfg=None,
+                 ):
+        super(BaseContourProposalHead, self).__init__(init_cfg)
+        self.point_nums = point_nums
+        self.strides = strides
+        self.regress_ranges = regress_ranges
+        self.use_tanh = use_tanh
+        #init component
+        self.init_predictor = nn.ModuleList(nn.Linear(in_channel, hidden_dim, bias=True),
+                                            nn.ReLU(inplace=True),
+                                            nn.Linear(hidden_dim, point_nums * 2, bias=False))
+        #global refine component
+        self.global_offset_predictor = nn.ModuleList(nn.Linear(in_channel * (point_nums + 1), hidden_dim * 2, bias=True),
+                                                     nn.ReLU(inplace=True),
+                                                     nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
+                                                     nn.ReLU(inplace=True),
+                                                     nn.Linear(hidden_dim, point_nums * 2, bias=False))
+        self.loss_contour = build_loss(loss_contour)
+        self.loss_init = build_loss(loss_init)
+        if loss_contour_mask is None:
+            self.loss_contour_mask = None
+        else:
+            self.loss_contour_mask = build_loss(loss_contour_mask)
+
+    def init_weights(self):
+        super(BaseContourProposalHead, self).init_weights()
+        # avoid init_cfg overwrite the initialization of `conv_offset`
+        for m in self.modules():
+            # DeformConv2dPack, ModulatedDeformConv2dPack
+            if hasattr(m, 'conv_offset'):
+                constant_init(m.conv_offset, 0)
+
+    def extract_features_single(self, feat, points, inds, img_h, img_w):
+        points_feat = get_gcn_feature(feat, points, inds, img_h, img_w)
+        return points_feat
+
+    def extract_features(self, ms_feats, points, img_h, img_w, img_inds, fl_inds):
+        num_points = points.size(0)
+        ms_points = []
+        ms_img_inds = []
+        for i in range(len(ms_feats)):
+            ms_points.append(points[fl_inds == i])
+            ms_img_inds.append(img_inds[fl_inds == i])
+        points_features = torch.zeros([num_points, points.size(1),
+                                       ms_feats[0].size(1)]).to(ms_feats[0].device)
+        ms_points_features = multi_apply(self.extract_features_single, ms_feats, ms_points,
+                                         ms_img_inds, img_h=img_h, img_w=img_w)
+        for i in range(len(ms_feats)):
+            points_features[fl_inds == i] = ms_points_features[i]
+        return points_features
+
+    def forward(self, ms_feats, gt_centers, gt_whs, img_h, img_w, inds):
+        num_instances = gt_centers.size(0)
+        gt_max_lengths = torch.max(gt_whs, dim=-1, keepdim=True)[0]
+        regress_ranges = torch.zeros((num_instances, len(self.regress_ranges), 2),
+                                     dtype=torch.int64, device=gt_centers.device)
+        for i, regress_range in enumerate(self.regress_ranges):
+            regress_ranges[:, i, 0] = regress_range[0]
+            regress_ranges[:, i, 1] = regress_range[1]
+        ms_inds = torch.arange(0, len(ms_feats), device=gt_centers.device,
+                               dtype=torch.int64).unsqueeze(0)
+        ms_inds = torch.logical_and(regress_ranges[..., 0] < gt_max_lengths,
+                                    regress_ranges[..., 1] >= gt_max_lengths).astype(torch.int64) * ms_inds
+        ms_inds = torch.sum(ms_inds, dim=1)
+        strides = torch.Tensor(self.strides, device=gt_centers.device)[ms_inds]
+
+        centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
+                                                 img_h, img_w, inds, ms_inds).squeeze(1)
+        shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums, 2)
+        if self.use_tanh[0]:
+            shape_embed = shape_embed.tanh()
+            contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * gt_whs.unsqueeze(1)
+        else:
+            contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * strides
+
+        contour_proposals_with_center = torch.cat([contours_proposal, gt_centers.unsqueeze(1)], dim=1)
+        contour_proposals_with_center_features = self.extract_features(ms_feats, contour_proposals_with_center,
+                                                                       img_h, img_w, inds, ms_inds)
+        normed_coarse_offsets = self.global_offset_predictor(contour_proposals_with_center_features.flatten(1))
+        normed_coarse_offsets = normed_coarse_offsets.reshape(num_instances, self.point_nums, 2)
+        if self.use_tanh[1]:
+            normed_coarse_offsets = normed_coarse_offsets.tanh()
+            coarse_contours = contours_proposal.detach() + normed_coarse_offsets * gt_whs.unsqueeze(1)
+        else:
+            coarse_contours = contours_proposal.detach() + normed_coarse_offsets * strides
+        return contours_proposal, coarse_contours, shape_embed, normed_coarse_offsets, strides
+
+    def compute_contour_losses(self, normed_init_offset_pred, normed_global_offset_pred,
+                               normed_init_offset_target, normed_global_offset_target):
+        num_poly = torch.tensor(
+            len(normed_init_offset_target), dtype=torch.float, device=normed_init_offset_pred.device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
+        loss_init = self.loss_init(normed_init_offset_pred, normed_init_offset_target,
+                                   avg_factor=num_poly * self.point_nums * 2)
+        loss_coarse = self.loss_contour(normed_global_offset_pred, normed_global_offset_target,
+                                        avg_factor=num_poly * self.point_nums * 2)
+        return dict(loss_init_contour=loss_init,
+                    loss_coarse_contour=loss_coarse)
+
+    def compute_contour_mask_losses(self, polys, gt_masks, gt_bboxes):
+        ret = dict()
+        num_mask = torch.tensor(
+            len(gt_bboxes), dtype=torch.float, device=gt_bboxes.device)
+        num_mask = max(reduce_mean(num_mask), 1.0)
+        for i, poly in enumerate(polys):
+            ret.update({'proposal_loss_mask_{}'.format(i): self.loss_contour_mask(poly,
+                                                                                  gt_masks,
+                                                                                  gt_bboxes,
+                                                                                  avg_factor=num_mask)})
+        return ret
+
+    def loss(self, normed_init_offset_pred, normed_global_offset_pred,
+             normed_init_offset_target, normed_global_offset_target,
+             contour_proposals, contour_coarse, gt_bboxes=None,
+             gt_masks=None, is_single_component=None):
+        """Compute losses of the head."""
+        ret = dict()
+        if is_single_component is not None:
+            normed_init_offset_pred = normed_init_offset_pred[is_single_component]
+            normed_global_offset_pred = normed_global_offset_pred[is_single_component]
+        ret.update(self.compute_contour_losses(normed_init_offset_pred, normed_global_offset_pred,
+                                               normed_init_offset_target, normed_global_offset_target))
+        if self.loss_contour_mask is not None:
+            ret.update(self.compute_contour_mask_losses([contour_proposals, contour_coarse],
+                                                        gt_masks, gt_bboxes))
+        return ret
+
+    def get_targets(self, gt_contours, gt_centers, gt_whs, contour_proposals, strides, is_single_component=None):
+        if is_single_component is not None:
+            gt_centers = gt_centers[is_single_component]
+            contour_proposals = contour_proposals[is_single_component]
+            gt_whs = gt_whs[is_single_component]
+        gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums, 1)
+        if self.use_tanh[0]:
+            normed_init_offset_target = (gt_contours - gt_centers) / gt_whs.unsqueeze(1)
+        else:
+            normed_init_offset_target = (gt_contours - gt_centers) / strides
+        if self.use_tanh[1]:
+            normed_global_offset_target = (gt_contours - contour_proposals) / gt_whs.unsqueeze(1)
+        else:
+            normed_global_offset_target = (gt_contours - contour_proposals) / strides
+        return normed_init_offset_target.detach(), normed_global_offset_target.detach()
+
+    def forward_train(self,
+                      x,
+                      img_metas,
+                      gt_bboxes,
+                      gt_contours,
+                      gt_masks=None,
+                      is_single_component=None,
+                      **kwargs):
+        """
+        Args:
+            x (list[Tensor]): Features from FPN.
+            img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+            gt_bboxes (Tensor): Ground truth bboxes of the image,
+                shape (num_gts, 4).
+            gt_labels (Tensor): Ground truth labels of each box,
+                shape (num_gts,).
+            gt_contours (Tensor): Ground truth contours,
+                shape (points_nums, 2).
+        Returns:
+            tuple:
+                losses: (dict[str, Tensor]): A dictionary of loss components.
+                proposal_list (list[Tensor]): Proposals of each image.
+        """
+        img_h, img_w = img_metas[0]['batch_input_shape']
+        inds = torch.cat([torch.full([len(gt_bboxes[i])], i) for i in range(len(gt_bboxes))], dim=0).to(x[0].device)
+        gt_bboxes = torch.cat(gt_bboxes, dim=0)
+        gt_contours = torch.cat(gt_contours, dim=0)
+        if is_single_component is not None:
+            is_single_component = torch.cat(is_single_component, dim=0)
+            is_single_component = is_single_component.to(torch.bool)
+        gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
+        gt_whs = (gt_bboxes[..., 2:4] - gt_bboxes[..., :2]) / 2.
+        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset, strides =\
+            self(x, gt_centers, gt_whs, img_h, img_w, inds)
+        normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers, gt_whs,
+                                                                                  contour_proposals, strides,
+                                                                                  is_single_component)
+        losses = self.loss(normed_init_offset, normed_global_offset,
+                           normed_init_offset_target, normed_global_offset_target,
+                           contour_proposals, coarse_contour, gt_bboxes,
+                           gt_masks, is_single_component)
+        return losses, coarse_contour, inds
+
+    def convert_single_imagebboxes2featurebboxes(self, bboxes_, img_meta):
+        bboxes = bboxes_.clone()
+        img_shape = img_meta['img_shape'][:2]
+        ori_shape = img_meta['ori_shape'][:2]
+        bboxes[:, [0, 2]] = bboxes[:, [0, 2]] / ori_shape[0] * img_shape[0]
+        bboxes[:, [1, 3]] = bboxes[:, [1, 3]] / ori_shape[0] * img_shape[0]
+        return bboxes
+
+    def convert_imagebboxes2featurebboxes(self, bboxes, img_metas):
+        return multi_apply(self.convert_single_imagebboxes2featurebboxes, bboxes, img_metas)
+
+    def simple_test(self, feats, img_metas, pred_bboxes):
+        """Test function without test-time augmentation.
+
+        Args:
+            feats (tuple[torch.Tensor]): Multi-level features from the
+                upstream network, each is a 4D-tensor.
+            img_metas (list[dict]): List of image information.
+            rescale (bool, optional): Whether to rescale the results.
+                Defaults to False.
+
+        Returns:
+            list[tuple[Tensor, Tensor]]: Each item in result_list is 2-tuple.
+                The first item is ``bboxes`` with shape (n, 5),
+                where 5 represent (tl_x, tl_y, br_x, br_y, score).
+                The shape of the second tensor in the tuple is ``labels``
+                with shape (n, ).
+        """
+        img_h, img_w = img_metas[0]['batch_input_shape']
+        inds = torch.cat([torch.full([len(pred_bboxes[i])], i) for i in range(len(pred_bboxes))], dim=0).to(feats[0].device)
+        pred_bboxes = self.convert_imagebboxes2featurebboxes(pred_bboxes, img_metas)
+
+        pred_bboxes = torch.cat(pred_bboxes, dim=0)
+        pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.
+        pred_whs = (pred_bboxes[..., 2:4] - pred_bboxes[..., :2]) / 2.
+
+        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset, strides =\
+            self(feats, pred_centers, pred_whs, img_h, img_w, inds)
+        return coarse_contour, inds
 
 @HEADS.register_module()
 class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
