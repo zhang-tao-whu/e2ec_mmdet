@@ -293,8 +293,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
-                 **kwarg
-                 ):
+                 **kwargs):
         super(FPNContourProposalHead, self).__init__(init_cfg)
         self.point_nums = point_nums
         self.strides = strides
@@ -302,11 +301,11 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
         self.use_tanh = use_tanh
         self.start_level = start_level
         #init component
-        self.init_predictor = nn.ModuleList(nn.Linear(in_channel, hidden_dim, bias=True),
+        self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
                                             nn.ReLU(inplace=True),
                                             nn.Linear(hidden_dim, point_nums * 2, bias=False))
         #global refine component
-        self.global_offset_predictor = nn.ModuleList(nn.Linear(in_channel * (point_nums + 1), hidden_dim * 2, bias=True),
+        self.global_offset_predictor = nn.Sequential(nn.Linear(in_channel * (point_nums + 1), hidden_dim * 2, bias=True),
                                                      nn.ReLU(inplace=True),
                                                      nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
                                                      nn.ReLU(inplace=True),
@@ -319,7 +318,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             self.loss_contour_mask = build_loss(loss_contour_mask)
 
     def init_weights(self):
-        super(BaseContourProposalHead, self).init_weights()
+        super(FPNContourProposalHead, self).init_weights()
         # avoid init_cfg overwrite the initialization of `conv_offset`
         for m in self.modules():
             # DeformConv2dPack, ModulatedDeformConv2dPack
@@ -356,9 +355,9 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
         ms_inds = torch.arange(0, len(ms_feats), device=gt_centers.device,
                                dtype=torch.int64).unsqueeze(0)
         ms_inds = torch.logical_and(regress_ranges[..., 0] < gt_max_lengths,
-                                    regress_ranges[..., 1] >= gt_max_lengths).astype(torch.int64) * ms_inds
+                                    regress_ranges[..., 1] >= gt_max_lengths).to(torch.int64) * ms_inds
         ms_inds = torch.sum(ms_inds, dim=1)
-        strides = torch.Tensor(self.strides, device=gt_centers.device)[ms_inds]
+        strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
 
         centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
                                                  img_h, img_w, inds, ms_inds).squeeze(1)
