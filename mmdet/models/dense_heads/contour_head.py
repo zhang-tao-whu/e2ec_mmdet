@@ -65,17 +65,57 @@ class PointResampler:
         self.density = density
 
     def circumference(self, rings):
-        # rings torch.Tensor(..., P, 2)
-        lengths = torch.sum((torch.roll(rings, 1, dims=-2) - rings) ** 2, dim=-1) ** 0.5
+        # rings torch.Tensor(..., P + 1, 2)
+        lengths = torch.sum((rings[:, 1:, :] - rings[:, :-1, :]) ** 2, dim=-1) ** 0.5
         return lengths.sum(dim=-2)
 
     def get_sampled_idxs(self, cum_lengths, circumference, sampled_nums):
-        return 
+        #cum torch.Tensor(N, P)
+        ratio = torch.arange(0, sampled_nums, dtype=torch.float32, device=cum_lengths.device) / sampled_nums
+        ratio = ratio.unsqueeze(0)
+        cum_lengths_ratio = cum_lengths / (circumference + 1e-6)
+        cost = torch.abs(cum_lengths_ratio.unsqueeze(1).repeat(1, sampled_nums, 1) -\
+                         ratio.unsqueeze(2).repeat(1, 1, cum_lengths_ratio.size(1)))
+        idxs = torch.min(cost, dim=2)[1]
+        return idxs
+
+    def get_cum_lengths(self, polys):
+        # polys torch.Tensor(N, p, 2)
+        polys = torch.cat([polys[:, :1, :], polys], dim=1)
+        lengths = torch.sum((polys[:, 1:, :] - polys[:, :-1, :]) ** 2, dim=-1) ** 0.5
+        return torch.cumsum(lengths, dim=1)
 
     def __call__(self, polys):
         # polys, torch.Tensor(N, P, 2)
-        return
-
+        points_num = polys.size(1)
+        sampled_num = points_num * self.sample_ratio
+        interpolated_polys = interpolation(polys, time=self.density)
+        n_instance = len(polys)
+        if self.mode == 'align_uniform':
+            assert points_num % self.align_num == 0
+            polys = polys.reshape(n_instance, self.align_num, points_num // self.align_num, 2)
+            temp = polys[:, :, :1, :]
+            temp = torch.roll(temp, -1, dims=1)
+            polys = torch.cat([polys, temp], dim=2)
+            polys = polys.flatten(0, 1)
+            interpolated_polys = interpolated_polys.reshape(n_instance * self.align_num,
+                                                            points_num // self.align_num * self.density, 2)
+            circumference = self.circumference(polys)
+            cum_lengths = self.get_cum_lengths(interpolated_polys)
+            sampled_idxs = self.get_sampled_idxs(cum_lengths, circumference, sampled_num // self.align_num)
+            index_0 = torch.arange(0, interpolated_polys.size(0)).unsqueeze(1).repeat(1, sampled_idxs.size(1))
+            sampled_polys = interpolated_polys[index_0, sampled_idxs, :]
+            sampled_polys = sampled_polys.reshape(n_instance, points_num, 2)
+            return sampled_polys
+        else:
+            temp = polys[:, :1, :]
+            polys = torch.cat([polys, temp], dim=1)
+            circumference = self.circumference(polys)
+            cum_lengths = self.get_cum_lengths(interpolated_polys)
+            sampled_idxs = self.get_sampled_idxs(cum_lengths, circumference, sampled_num)
+            index_0 = torch.arange(0, interpolated_polys.size(0)).unsqueeze(1).repeat(1, sampled_idxs.size(1))
+            sampled_polys = interpolated_polys[index_0, sampled_idxs, :]
+            return sampled_polys
 
 @HEADS.register_module()
 class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
