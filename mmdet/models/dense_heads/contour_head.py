@@ -106,7 +106,7 @@ class PointResampler:
             index_0 = torch.arange(0, interpolated_polys.size(0)).unsqueeze(1).repeat(1, sampled_idxs.size(1))
             sampled_polys = interpolated_polys[index_0, sampled_idxs, :]
             sampled_polys = sampled_polys.reshape(n_instance, points_num, 2)
-            return sampled_polys
+            return sampled_polys.detach()
         else:
             temp = polys[:, :1, :]
             polys = torch.cat([polys, temp], dim=1)
@@ -115,7 +115,7 @@ class PointResampler:
             sampled_idxs = self.get_sampled_idxs(cum_lengths, circumference, sampled_num)
             index_0 = torch.arange(0, interpolated_polys.size(0)).unsqueeze(1).repeat(1, sampled_idxs.size(1))
             sampled_polys = interpolated_polys[index_0, sampled_idxs, :]
-            return sampled_polys
+            return sampled_polys.detach()
 
 @HEADS.register_module()
 class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
@@ -631,6 +631,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             self.loss_contour_mask = build_loss(loss_contour_mask)
         else:
             self.loss_contour_mask = None
+        self.sampler = PointResampler(mode='uniform', sample_ratio=1, align_num=None, density=10)
 
     def init_weights(self):
         super(BaseContourEvolveHead, self).init_weights()
@@ -651,6 +652,8 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         # evolve contour
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
+            if i == self.iter_num - 1:
+                py_in = self.sampler(py_in)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
