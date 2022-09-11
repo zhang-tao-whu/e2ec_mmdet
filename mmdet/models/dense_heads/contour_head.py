@@ -44,6 +44,39 @@ def get_gcn_feature(cnn_feature, img_poly, ind, h, w):
         gcn_feature[ind == i] = feature
     return gcn_feature
 
+def interpolation(poly, time=10):
+    ori_points_num = poly.size(1)
+    poly_roll =torch.roll(poly, shifts=1, dims=1)
+    poly_ = poly.unsqueeze(3).repeat(1, 1, 1, time)
+    poly_roll = poly_roll.unsqueeze(3).repeat(1, 1, 1, time)
+    step = torch.arange(0, time, dtype=torch.float32).cuda() / time
+    poly_interpolation = poly_ * step + poly_roll * (1. - step)
+    poly_interpolation = poly_interpolation.permute(0, 1, 3, 2).reshape(poly_interpolation.size(0), ori_points_num * time, 2)
+    return poly_interpolation
+
+class PointResampler:
+    def __init__(self, mode='uniform', sample_ratio=1, align_num=None, density=10):
+        assert mode in ['uniform', 'align_uniform']
+        if mode == 'align_uniform':
+            assert align_num is not None
+        self.mode = mode
+        self.align_num = align_num
+        self.sample_ratio = sample_ratio
+        self.density = density
+
+    def circumference(self, rings):
+        # rings torch.Tensor(..., P, 2)
+        lengths = torch.sum((torch.roll(rings, 1, dims=-2) - rings) ** 2, dim=-1) ** 0.5
+        return lengths.sum(dim=-2)
+
+    def get_sampled_idxs(self, cum_lengths, circumference, sampled_nums):
+        return 
+
+    def __call__(self, polys):
+        # polys, torch.Tensor(N, P, 2)
+        return
+
+
 @HEADS.register_module()
 class BaseContourProposalHead(BaseModule, metaclass=ABCMeta):
     """Base class for DenseHeads."""
@@ -293,8 +326,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                  init_cfg=None,
                  train_cfg=None,
                  test_cfg=None,
-                 **kwarg
-                 ):
+                 **kwargs):
         super(FPNContourProposalHead, self).__init__(init_cfg)
         self.point_nums = point_nums
         self.strides = strides
