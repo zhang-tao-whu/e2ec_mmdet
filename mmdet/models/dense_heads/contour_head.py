@@ -451,7 +451,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * strides
         contours_proposal_ret = contours_proposal
 
-        #contours_proposal = self.sampler(contours_proposal)
+        contours_proposal = self.sampler(contours_proposal)
         contour_proposals_with_center = torch.cat([contours_proposal, gt_centers.unsqueeze(1)], dim=1)
         contour_proposals_with_center_features = self.extract_features(ms_feats, contour_proposals_with_center,
                                                                        img_h, img_w, inds, ms_inds)
@@ -670,10 +670,10 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
             ratio = self.point_nums[i] // py_in.size(1)
-            #if i == self.iter_num - 1:
-            #    py_in = self.sampler(py_in, sample_ratio=ratio)
-            #else:
-            #    py_in = self.align_sampler(py_in, sample_ratio=ratio)
+            if i == self.iter_num - 1:
+                py_in = self.sampler(py_in, sample_ratio=ratio)
+            else:
+                py_in = self.align_sampler(py_in, sample_ratio=ratio)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
