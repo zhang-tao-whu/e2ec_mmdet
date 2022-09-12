@@ -615,6 +615,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                  point_nums=128,
                  evolve_deform_stride=4.,
                  iter_num=3,
+                 state_dim=128,
                  loss_contour=dict(
                      type='SmoothL1Loss',
                      beta=0.25,
@@ -635,7 +636,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             assert len(self.point_nums) == self.iter_num
         # evolve component
         for i in range(iter_num):
-            evolve_gcn = Snake(state_dim=128, feature_dim=in_channel)
+            evolve_gcn = Snake(state_dim=state_dim, feature_dim=in_channel)
             self.__setattr__('evolve_gcn' + str(i), evolve_gcn)
         self.loss_contour = build_loss(loss_contour)
         if loss_last_evolve is not None:
@@ -818,9 +819,14 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
     def __init__(self,
                  in_channel=256,
                  point_nums=128,
+                 state_dim=128,
                  evolve_deform_stride=4.,
+                 evolve_deform_ratio=1.0,
                  iter_num=3,
+                 use_tanh=False,
+                 norm_type='constant',
                  attentive_expand_ratio=1.2,
+                 add_normed_coords=True,
                  loss_contour=dict(
                      type='SmoothL1Loss',
                      beta=0.25,
@@ -831,11 +837,14 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                  train_cfg=None,
                  test_cfg=None,
                  ):
+        if add_normed_coords:
+            state_dim = state_dim + 2
         super(BaseContourEvolveHead, self).__init__(
             in_channel=in_channel,
             point_nums=point_nums,
             evolve_deform_stride=evolve_deform_stride,
             iter_num=iter_num,
+            state_dim=state_dim,
             loss_contour=loss_contour,
             loss_contour_mask=loss_contour_mask,
             loss_last_evolve=loss_last_evolve,
@@ -843,13 +852,24 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             train_cfg=train_cfg,
             test_cfg=test_cfg)
         self.attentive_expand_ratio = attentive_expand_ratio
-        self.attentive_predictor = nn.Sequential(nn.Linear(in_channel * 2 + 128, 256, bias=True),
+        self.evolve_deform_ratio = evolve_deform_stride
+        self.add_normed_coords = add_normed_coords
+        self.use_tanh = use_tanh
+        self.norm_type = norm_type
+        self.attentive_predictor = nn.Sequential(nn.Linear(in_channel * 2 + state_dim, 256, bias=True),
                                                  nn.LayerNorm(256),
                                                  nn.ReLU(inplace=True),
                                                  nn.Linear(256, 64, bias=True),
                                                  nn.ReLU(inplace=True),
                                                  nn.Linear(64, 1, bias=False),
                                                  nn.Sigmoid())
+
+    def _add_pos(self, py_features, py_in):
+        min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+        max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+        rela_coords = (py_features - min_coords) / (max_coords - min_coords)
+        py_features = torch.cat([py_features, rela_coords.permute(0, 2, 1).detach()], dim=1)
+        return py_features
 
     def forward(self, x, contour_proposals, img_h, img_w, inds, use_fpn_level=0):
         x = x[use_fpn_level]
@@ -865,11 +885,25 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             else:
                 py_in = self.align_sampler(py_in, sample_ratio=ratio)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
+            if self.add_normed_coords:
+                py_features_pos = self._add_pos(py_features, py_in)
+            else:
+                py_features_pos = py_features
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
-            normed_offset, deep_features = evolve_gcn(py_features, return_feature=True)
+            normed_offset, deep_features = evolve_gcn(py_features_pos, return_feature=True)
             normed_offset = normed_offset.permute(0, 2, 1)
 
-            offset = normed_offset * self.evolve_deform_stride
+            if self.use_tanh:
+                normed_offset = normed_offset.tanh()
+
+            if self.norm_type == 'constant':
+                offset = normed_offset * self.evolve_deform_stride
+            else:
+                max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+                min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+                wh = max_coords - min_coords
+                offset = normed_offset * wh * self.evolve_deform_ratio
+
             py_out = py_in.detach() + offset
 
             py_out_features = get_gcn_feature(x, py_out, inds, img_h, img_w)
@@ -885,6 +919,18 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             normed_attentive_offsets.append(attentive_normed_offset)
         assert len(outputs_contours) == len(normed_offsets) + 1 == len(attentive_normed_offset) + 1
         return outputs_contours, normed_offsets, normed_attentive_offsets
+
+    def get_targets(self, py_in, gt_contours, is_single_component=None):
+        if is_single_component is not None:
+            py_in = py_in[is_single_component]
+        if self.norm_type == 'constant':
+            normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
+        else:
+            max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+            min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+            wh = max_coords - min_coords
+            normed_offset_target = (gt_contours - py_in) / (wh * self.evolve_deform_ratio + 1e-6)
+        return normed_offset_target.detach()
 
     def loss(self, normed_offsets_preds, normed_offsets_targets, is_single_component=None, attr=''):
         """Compute losses of the head."""
