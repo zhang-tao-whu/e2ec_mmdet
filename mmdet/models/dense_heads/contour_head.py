@@ -371,7 +371,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                  test_cfg=None,
                  **kwargs):
         super(FPNContourProposalHead, self).__init__(init_cfg)
-        if not isinstance(point_nums):
+        if not isinstance(point_nums, list):
             self.point_nums = [point_nums, point_nums]
         else:
             assert len(point_nums) == 2
