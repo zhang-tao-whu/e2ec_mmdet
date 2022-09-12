@@ -85,10 +85,13 @@ class PointResampler:
         lengths = torch.sum((polys[:, 1:, :] - polys[:, :-1, :]) ** 2, dim=-1) ** 0.5
         return torch.cumsum(lengths, dim=1)
 
-    def __call__(self, polys):
+    def __call__(self, polys, sample_ratio=None):
         # polys, torch.Tensor(N, P, 2)
         points_num = polys.size(1)
-        sampled_num = points_num * self.sample_ratio
+        if sample_ratio is None:
+            sampled_num = points_num * self.sample_ratio
+        else:
+            sampled_num = points_num * sample_ratio
         interpolated_polys = interpolation(polys, time=self.density)
         n_instance = len(polys)
         if self.mode == 'align_uniform':
@@ -368,7 +371,11 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
                  test_cfg=None,
                  **kwargs):
         super(FPNContourProposalHead, self).__init__(init_cfg)
-        self.point_nums = point_nums
+        if not isinstance(point_nums):
+            self.point_nums = [point_nums, point_nums]
+        else:
+            assert len(point_nums) == 2
+            self.point_nums = point_nums
         self.strides = strides
         self.regress_ranges = regress_ranges
         self.use_tanh = use_tanh
@@ -376,19 +383,21 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
         #init component
         self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
                                             nn.ReLU(inplace=True),
-                                            nn.Linear(hidden_dim, point_nums * 2, bias=False))
+                                            nn.Linear(hidden_dim, self.point_nums[0] * 2, bias=False))
         #global refine component
-        self.global_offset_predictor = nn.Sequential(nn.Linear(in_channel * (point_nums + 1), hidden_dim * 2, bias=True),
+        self.global_offset_predictor = nn.Sequential(nn.Linear(in_channel * (self.point_nums[1] + 1), hidden_dim * 2, bias=True),
                                                      nn.ReLU(inplace=True),
                                                      nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
                                                      nn.ReLU(inplace=True),
-                                                     nn.Linear(hidden_dim, point_nums * 2, bias=False))
+                                                     nn.Linear(hidden_dim, self.point_nums[1] * 2, bias=False))
         self.loss_contour = build_loss(loss_contour)
         self.loss_init = build_loss(loss_init)
         if loss_contour_mask is None:
             self.loss_contour_mask = None
         else:
             self.loss_contour_mask = build_loss(loss_contour_mask)
+        self.sampler = PointResampler(mode='align_uniform', sample_ratio=self.point_nums[1] // self.point_nums[0],
+                                      align_num=4, density=10)
 
     def init_weights(self):
         super(FPNContourProposalHead, self).init_weights()
@@ -434,24 +443,26 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
 
         centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
                                                  img_h, img_w, inds, ms_inds).squeeze(1)
-        shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums, 2)
+        shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums[0], 2)
         if self.use_tanh[0]:
             shape_embed = shape_embed.tanh()
             contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * gt_whs.unsqueeze(1)
         else:
             contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * strides
+        contours_proposal_ret = contours_proposal
 
+        contours_proposal = self.sampler(contours_proposal)
         contour_proposals_with_center = torch.cat([contours_proposal, gt_centers.unsqueeze(1)], dim=1)
         contour_proposals_with_center_features = self.extract_features(ms_feats, contour_proposals_with_center,
                                                                        img_h, img_w, inds, ms_inds)
         normed_coarse_offsets = self.global_offset_predictor(contour_proposals_with_center_features.flatten(1))
-        normed_coarse_offsets = normed_coarse_offsets.reshape(num_instances, self.point_nums, 2)
+        normed_coarse_offsets = normed_coarse_offsets.reshape(num_instances, self.point_nums[1], 2)
         if self.use_tanh[1]:
             normed_coarse_offsets = normed_coarse_offsets.tanh()
             coarse_contours = contours_proposal.detach() + normed_coarse_offsets * gt_whs.unsqueeze(1)
         else:
             coarse_contours = contours_proposal.detach() + normed_coarse_offsets * strides
-        return contours_proposal, coarse_contours, shape_embed, normed_coarse_offsets, strides
+        return contours_proposal_ret, coarse_contours, shape_embed, normed_coarse_offsets, strides
 
     def compute_contour_losses(self, normed_init_offset_pred, normed_global_offset_pred,
                                normed_init_offset_target, normed_global_offset_target):
@@ -615,9 +626,13 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                  test_cfg=None,
                  ):
         super(BaseContourEvolveHead, self).__init__(init_cfg)
-        self.point_nums = point_nums
         self.evolve_deform_stride = evolve_deform_stride
         self.iter_num = iter_num
+        if not isinstance(point_nums, list):
+            self.point_nums = [point_nums] * self.iter_num
+        else:
+            self.point_nums = point_nums
+            assert len(self.point_nums) == self.iter_num
         # evolve component
         for i in range(iter_num):
             evolve_gcn = Snake(state_dim=128, feature_dim=in_channel)
@@ -653,10 +668,11 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         # evolve contour
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
+            ratio = self.point_nums[i] // py_in.size(1)
             if i == self.iter_num - 1:
-                py_in = self.sampler(py_in)
+                py_in = self.sampler(py_in, sample_ratio=ratio)
             else:
-                py_in = self.align_sampler(py_in)
+                py_in = self.align_sampler(py_in, sample_ratio=ratio)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
@@ -676,7 +692,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         for i, (offsets_preds, offsets_targets) in enumerate(zip(normed_offsets_preds, normed_offsets_targets)):
             if is_single_component is not None:
                 offsets_preds = offsets_preds[is_single_component]
-            loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums * 2)
+            loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums[i] * 2)
             ret.update({'evolve_loss_' + str(i): loss})
         return ret
 
@@ -687,7 +703,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         num_poly = max(reduce_mean(num_poly), 1.0)
         num_key_points = torch.sum(key_points_mask).to(torch.float)
         num_key_points = max(reduce_mean(num_key_points), 1.0)
-        avg_factor = (num_poly * self.point_nums * 2, num_key_points * 2)
+        avg_factor = (num_poly * self.point_nums[-1] * 2, num_key_points * 2)
         loss = self.loss_last_evolve(pred_contour[is_single_component], normed_pred_offsets[is_single_component], target_contour,
                                      key_points, key_points_mask, avg_factor=avg_factor)
         ret.update({'evolve_loss_last': loss})
