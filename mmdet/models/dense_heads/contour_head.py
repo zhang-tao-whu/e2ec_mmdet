@@ -67,13 +67,13 @@ class PointResampler:
     def circumference(self, rings):
         # rings torch.Tensor(..., P + 1, 2)
         lengths = torch.sum((rings[:, 1:, :] - rings[:, :-1, :]) ** 2, dim=-1) ** 0.5
-        return lengths.sum(dim=-2)
+        return lengths.sum(dim=-1)
 
     def get_sampled_idxs(self, cum_lengths, circumference, sampled_nums):
         #cum torch.Tensor(N, P)
         ratio = torch.arange(0, sampled_nums, dtype=torch.float32, device=cum_lengths.device) / sampled_nums
         ratio = ratio.unsqueeze(0)
-        cum_lengths_ratio = cum_lengths / (circumference + 1e-6)
+        cum_lengths_ratio = cum_lengths / (circumference.unsqueeze(1) + 1e-6)
         cost = torch.abs(cum_lengths_ratio.unsqueeze(1).repeat(1, sampled_nums, 1) -\
                          ratio.unsqueeze(2).repeat(1, 1, cum_lengths_ratio.size(1)))
         idxs = torch.min(cost, dim=2)[1]
@@ -632,6 +632,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         else:
             self.loss_contour_mask = None
         self.sampler = PointResampler(mode='uniform', sample_ratio=1, align_num=None, density=10)
+        self.align_sampler = PointResampler(mode='align_uniform', sample_ratio=1, align_num=4, density=10)
 
     def init_weights(self):
         super(BaseContourEvolveHead, self).init_weights()
@@ -654,6 +655,8 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             py_in = outputs_contours[-1]
             if i == self.iter_num - 1:
                 py_in = self.sampler(py_in)
+            else:
+                py_in = self.align_sampler(py_in)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
