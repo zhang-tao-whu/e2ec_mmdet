@@ -811,6 +811,202 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             ret.append(output_contour[inds == i])
         return ret
 
+@HEADS.register_module()
+class AttentiveContourEvolveHead(BaseContourEvolveHead):
+    """Base class for DenseHeads."""
+
+    def __init__(self,
+                 in_channel=256,
+                 point_nums=128,
+                 evolve_deform_stride=4.,
+                 iter_num=3,
+                 attentive_expand_ratio=1.2,
+                 loss_contour=dict(
+                     type='SmoothL1Loss',
+                     beta=0.25,
+                     loss_weight=1.0),
+                 loss_contour_mask=None,
+                 loss_last_evolve=None,
+                 init_cfg=None,
+                 train_cfg=None,
+                 test_cfg=None,
+                 ):
+        super(BaseContourEvolveHead, self).__init__(
+            in_channel=in_channel,
+            point_nums=point_nums,
+            evolve_deform_stride=evolve_deform_stride,
+            iter_num=iter_num,
+            loss_contour=loss_contour,
+            loss_contour_mask=loss_contour_mask,
+            loss_last_evolve=loss_last_evolve,
+            init_cfg=init_cfg,
+            train_cfg=train_cfg,
+            test_cfg=test_cfg)
+        self.attentive_expand_ratio = attentive_expand_ratio
+        self.attentive_predictor = nn.Sequential(nn.Linear(in_channel * 2 + 128, 256, bias=True),
+                                                 nn.LayerNorm(256),
+                                                 nn.ReLU(inplace=True),
+                                                 nn.Linear(256, 64, bias=True),
+                                                 nn.ReLU(inplace=True),
+                                                 nn.Linear(64, 1, bias=False),
+                                                 nn.Sigmoid())
+
+    def forward(self, x, contour_proposals, img_h, img_w, inds, use_fpn_level=0):
+        x = x[use_fpn_level]
+        outputs_contours = [contour_proposals]
+        normed_offsets = []
+        normed_attentive_offsets = []
+        # evolve contour
+        for i in range(self.iter_num):
+            py_in = outputs_contours[-1]
+            ratio = self.point_nums[i] // py_in.size(1)
+            if i == self.iter_num - 1:
+                py_in = self.sampler(py_in, sample_ratio=ratio)
+            else:
+                py_in = self.align_sampler(py_in, sample_ratio=ratio)
+            py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
+            evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
+            normed_offset, deep_features = evolve_gcn(py_features, return_feature=True)
+            normed_offset = normed_offset.permute(0, 2, 1)
+
+            offset = normed_offset * self.evolve_deform_stride
+            py_out = py_in.detach() + offset
+
+            py_out_features = get_gcn_feature(x, py_out, inds, img_h, img_w)
+            attentive_features = torch.cat([py_features.permute(0, 2, 1),
+                                            deep_features.permute(0, 2, 1), py_out_features], dim=-1)
+            attentive = self.attentive_predictor(attentive_features)
+            attentive_normed_offset = normed_offset.detach() * attentive * self.attentive_expand_ratio
+
+            py_out_attentive = py_in.detach() + attentive_normed_offset * self.evolve_deform_stride
+
+            outputs_contours.append(py_out_attentive)
+            normed_offsets.append(normed_offset)
+            normed_attentive_offsets.append(attentive_normed_offset)
+        assert len(outputs_contours) == len(normed_offsets) + 1 == len(attentive_normed_offset) + 1
+        return outputs_contours, normed_offsets, normed_attentive_offsets
+
+    def loss(self, normed_offsets_preds, normed_offsets_targets, is_single_component=None, attr=''):
+        """Compute losses of the head."""
+        ret = dict()
+        num_poly = torch.tensor(
+            len(normed_offsets_targets[0]), dtype=torch.float, device=normed_offsets_preds[0].device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
+        for i, (offsets_preds, offsets_targets) in enumerate(zip(normed_offsets_preds, normed_offsets_targets)):
+            if is_single_component is not None:
+                offsets_preds = offsets_preds[is_single_component]
+            loss = self.loss_contour(offsets_preds, offsets_targets, avg_factor=num_poly * self.point_nums[i] * 2)
+            ret.update({'evolve_loss_' + attr + str(i): loss})
+        return ret
+
+    def loss_last(self, pred_contour, normed_pred_offsets, target_contour, key_points,
+                  key_points_mask, is_single_component=None, attr=''):
+        ret = dict()
+        num_poly = torch.tensor(
+            len(pred_contour), dtype=torch.float, device=pred_contour.device)
+        num_poly = max(reduce_mean(num_poly), 1.0)
+        num_key_points = torch.sum(key_points_mask).to(torch.float)
+        num_key_points = max(reduce_mean(num_key_points), 1.0)
+        avg_factor = (num_poly * self.point_nums[-1] * 2, num_key_points * 2)
+        loss = self.loss_last_evolve(pred_contour[is_single_component], normed_pred_offsets[is_single_component], target_contour,
+                                     key_points, key_points_mask, avg_factor=avg_factor)
+        ret.update({'evolve_loss_last' + attr: loss})
+        return ret
+
+    def forward_train(self,
+                      x,
+                      img_metas,
+                      contour_proposals,
+                      gt_contours,
+                      inds,
+                      key_points=None,
+                      key_points_masks=None,
+                      gt_bboxes=None,
+                      gt_masks=None,
+                      is_single_component=None,
+                      **kwargs):
+        """
+        Args:
+            x (list[Tensor]): Features from FPN.
+            img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+            gt_bboxes (Tensor): Ground truth bboxes of the image,
+                shape (num_gts, 4).
+            gt_labels (Tensor): Ground truth labels of each box,
+                shape (num_gts,).
+            gt_contours (Tensor): Ground truth contours,
+                shape (points_nums, 2).
+        Returns:
+            tuple:
+                losses: (dict[str, Tensor]): A dictionary of loss components.
+                proposal_list (list[Tensor]): Proposals of each image.
+        """
+        img_h, img_w = img_metas[0]['batch_input_shape']
+        gt_contours = torch.cat(gt_contours, dim=0)
+        gt_bboxes = torch.cat(gt_bboxes, dim=0)
+        if is_single_component is not None:
+            is_single_component = torch.cat(is_single_component, dim=0)
+            is_single_component = is_single_component.to(torch.bool)
+        output_contours, normed_offsets, attentive_normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        normed_offsets_targets = []
+        for i in range(len(normed_offsets)):
+            normed_offset_target = self.get_targets(output_contours[i], gt_contours, is_single_component)
+            normed_offsets_targets.append(normed_offset_target)
+        if self.loss_last_evolve is None:
+            losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
+            losses.update(self.loss(attentive_normed_offsets, normed_offsets_targets,
+                                    is_single_component, attr='attentive'))
+            if self.loss_contour_mask is not None:
+                losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                                                             gt_masks, gt_bboxes))
+        else:
+            key_points = torch.cat(key_points, dim=0)
+            key_points_masks = torch.cat(key_points_masks, dim=0)
+            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1], is_single_component)
+            losses.update(self.loss(attentive_normed_offsets[:-1], normed_offsets_targets[:-1],
+                                    is_single_component, attr='attentive'))
+            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+                                         normed_offsets[-1], gt_contours, key_points,
+                                         key_points_masks, is_single_component))
+            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+                                         attentive_normed_offsets[-1], gt_contours, key_points,
+                                         key_points_masks, is_single_component, attr='attentive'))
+
+            if self.loss_contour_mask is not None:
+                losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                                                             gt_masks, gt_bboxes))
+        return losses
+
+    def simple_test(self,
+                    x,
+                    img_metas,
+                    contour_proposals,
+                    inds,
+                    ret_stage=-1):
+        """Test function without test-time augmentation.
+
+        Args:
+            feats (tuple[torch.Tensor]): Multi-level features from the
+                upstream network, each is a 4D-tensor.
+            img_metas (list[dict]): List of image information.
+            rescale (bool, optional): Whether to rescale the results.
+                Defaults to False.
+
+        Returns:
+            list[tuple[Tensor, Tensor]]: Each item in result_list is 2-tuple.
+                The first item is ``bboxes`` with shape (n, 5),
+                where 5 represent (tl_x, tl_y, br_x, br_y, score).
+                The shape of the second tensor in the tuple is ``labels``
+                with shape (n, ).
+        """
+        img_h, img_w = img_metas[0]['batch_input_shape']
+        output_contours, normed_offsets, attentive_normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        output_contour = output_contours[ret_stage]
+        ret = []
+        for i in range(len(img_metas)):
+            ret.append(output_contour[inds == i])
+        return ret
+
 class CircConv(nn.Module):
     def __init__(self, state_dim, out_state_dim=None, n_adj=4):
         super(CircConv, self).__init__()
@@ -892,13 +1088,16 @@ class Snake(nn.Module):
             nn.Conv1d(64, 2, 1)
         )
 
-    def forward(self, x):
+    def forward(self, x, return_feature=False):
         if self.head is not None:
             x = self.head(x)
         states = [x]
         for i in range(self.res_layer_num):
             x = self.__getattr__('res' + str(i))(x) + x
             states.append(x)
+
+        if return_feature:
+            feats = states[-1]
 
         state = torch.cat(states, dim=1)
 
@@ -907,5 +1106,7 @@ class Snake(nn.Module):
         state = torch.cat([global_state, state], dim=1)
 
         x = self.prediction(state)
-
-        return x
+        if return_feature:
+            return x, feats
+        else:
+            return x
