@@ -782,7 +782,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         else:
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
-            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1], is_single_component)
+            losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
             losses.update(self.loss_last(pys_in[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
                                          key_points_masks, is_single_component))
