@@ -46,12 +46,13 @@ def get_gcn_feature(cnn_feature, img_poly, ind, h, w):
 
 def interpolation(poly, time=10):
     ori_points_num = poly.size(1)
-    poly_roll =torch.roll(poly, shifts=1, dims=1)
+    poly_roll = torch.roll(poly, shifts=-1, dims=1)
     poly_ = poly.unsqueeze(3).repeat(1, 1, 1, time)
     poly_roll = poly_roll.unsqueeze(3).repeat(1, 1, 1, time)
-    step = torch.arange(0, time, dtype=torch.float32).cuda() / time
-    poly_interpolation = poly_ * step + poly_roll * (1. - step)
-    poly_interpolation = poly_interpolation.permute(0, 1, 3, 2).reshape(poly_interpolation.size(0), ori_points_num * time, 2)
+    step = torch.arange(0, time, dtype=torch.float32).to(poly.device) / time
+    poly_interpolation = poly_roll * step + poly_ * (1. - step)
+    poly_interpolation = poly_interpolation.permute(0, 1, 3, 2).reshape(poly_interpolation.size(0),
+                                                                        ori_points_num * time, 2)
     return poly_interpolation
 
 class PointResampler:
