@@ -511,6 +511,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             contour_proposals = contour_proposals[is_single_component]
             gt_whs = gt_whs[is_single_component]
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums[0], 1)
+        assert gt_contours.size(1) >= self.point_nums[0] and gt_contours.size(1) >= self.point_nums[1]
         init_points_stride = gt_contours.size(1) // self.point_nums[0]
         coarse_points_stride = gt_contours.size(1) // self.point_nums[1]
         if self.use_tanh[0]:
@@ -728,7 +729,9 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
     def get_targets(self, py_in, gt_contours, is_single_component=None):
         if is_single_component is not None:
             py_in = py_in[is_single_component]
-        normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
+        assert gt_contours.size(1) >= py_in.size(1)
+        points_stride = py_in.size(1) // gt_contours.size(1)
+        normed_offset_target = (gt_contours[:, :, ::points_stride] - py_in) / self.evolve_deform_stride
         return normed_offset_target.detach()
 
     def forward_train(self,
@@ -885,6 +888,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         outputs_contours = [contour_proposals]
         normed_offsets = []
         normed_attentive_offsets = []
+        pys_in = []
         # evolve contour
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
@@ -893,6 +897,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                 py_in = self.sampler(py_in, sample_ratio=ratio)
             else:
                 py_in = self.align_sampler(py_in, sample_ratio=ratio)
+            pys_in.append(py_in)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             if self.add_normed_coords:
                 py_features_pos = self._add_pos(py_features, py_in)
@@ -926,19 +931,21 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             outputs_contours.append(py_out_attentive)
             normed_offsets.append(normed_offset)
             normed_attentive_offsets.append(attentive_normed_offset)
-        assert len(outputs_contours) == len(normed_offsets) + 1 == len(attentive_normed_offset) + 1
-        return outputs_contours, normed_offsets, normed_attentive_offsets
+        assert len(outputs_contours) == len(normed_offsets) + 1 == len(attentive_normed_offset) + 1 == len(pys_in) + 1
+        return outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
 
     def get_targets(self, py_in, gt_contours, is_single_component=None):
         if is_single_component is not None:
             py_in = py_in[is_single_component]
+        assert gt_contours.size(1) >= py_in.size(1)
+        points_stride = py_in.size(1) // gt_contours.size(1)
         if self.norm_type == 'constant':
-            normed_offset_target = (gt_contours - py_in) / self.evolve_deform_stride
+            normed_offset_target = (gt_contours[:, ::points_stride, :] - py_in) / self.evolve_deform_stride
         else:
             max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
             min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
             wh = max_coords - min_coords
-            normed_offset_target = (gt_contours - py_in) / (wh * self.evolve_deform_ratio + 1e-6)
+            normed_offset_target = (gt_contours[:, ::points_stride, :] - py_in) / (wh * self.evolve_deform_ratio + 1e-6)
         return normed_offset_target.detach()
 
     def loss(self, normed_offsets_preds, normed_offsets_targets, is_single_component=None, attr=''):
@@ -1002,10 +1009,14 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         if is_single_component is not None:
             is_single_component = torch.cat(is_single_component, dim=0)
             is_single_component = is_single_component.to(torch.bool)
-        output_contours, normed_offsets, attentive_normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
-        for i in range(len(normed_offsets)):
-            normed_offset_target = self.get_targets(output_contours[i], gt_contours, is_single_component)
+        if self.loss_last_evolve is None:
+            need_targets = len(normed_offsets)
+        else:
+            need_targets = len(normed_offsets) - 1
+        for i in range(need_targets):
+            normed_offset_target = self.get_targets(pys_in[i], gt_contours, is_single_component)
             normed_offsets_targets.append(normed_offset_target)
         if self.loss_last_evolve is None:
             losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
@@ -1017,8 +1028,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         else:
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
-            losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1], is_single_component)
-            losses.update(self.loss(attentive_normed_offsets[:-1], normed_offsets_targets[:-1],
+            losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
+            losses.update(self.loss(attentive_normed_offsets, normed_offsets_targets,
                                     is_single_component, attr='attentive'))
             losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
@@ -1055,7 +1066,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                 with shape (n, ).
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        output_contours, normed_offsets, attentive_normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         output_contour = output_contours[ret_stage]
         ret = []
         for i in range(len(img_metas)):
