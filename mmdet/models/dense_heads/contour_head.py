@@ -462,7 +462,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             coarse_contours = contours_proposal.detach() + normed_coarse_offsets * gt_whs.unsqueeze(1)
         else:
             coarse_contours = contours_proposal.detach() + normed_coarse_offsets * strides
-        return contours_proposal_ret, coarse_contours, shape_embed, normed_coarse_offsets, strides
+        return contours_proposal_ret, coarse_contours, contours_proposal, shape_embed, normed_coarse_offsets, strides
 
     def compute_contour_losses(self, normed_init_offset_pred, normed_global_offset_pred,
                                normed_init_offset_target, normed_global_offset_target):
@@ -510,14 +510,16 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             contour_proposals = contour_proposals[is_single_component]
             gt_whs = gt_whs[is_single_component]
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums[0], 1)
+        init_points_stride = gt_contours.size(1) // self.point_nums[0]
+        coarse_points_stride = gt_contours.size(1) // self.point_nums[1]
         if self.use_tanh[0]:
-            normed_init_offset_target = (gt_contours[:, ::4, :] - gt_centers) / gt_whs.unsqueeze(1)
+            normed_init_offset_target = (gt_contours[:, ::init_points_stride, :] - gt_centers) / gt_whs.unsqueeze(1)
         else:
-            normed_init_offset_target = (gt_contours - gt_centers) / strides
+            normed_init_offset_target = (gt_contours[:, ::init_points_stride, :] - gt_centers) / strides
         if self.use_tanh[1]:
-            normed_global_offset_target = (gt_contours[:, ::2, :] - self.sampler(contour_proposals)) / gt_whs.unsqueeze(1)
+            normed_global_offset_target = (gt_contours[:, ::coarse_points_stride, :] - contour_proposals) / gt_whs.unsqueeze(1)
         else:
-            normed_global_offset_target = (gt_contours - contour_proposals) / strides
+            normed_global_offset_target = (gt_contours[:, ::coarse_points_stride, :] - contour_proposals) / strides
         return normed_init_offset_target.detach(), normed_global_offset_target.detach()
 
     def forward_train(self,
@@ -554,10 +556,10 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             is_single_component = is_single_component.to(torch.bool)
         gt_centers = (gt_bboxes[..., :2] + gt_bboxes[..., 2:4]) / 2.
         gt_whs = (gt_bboxes[..., 2:4] - gt_bboxes[..., :2]) / 2.
-        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset, strides =\
+        contour_proposals, coarse_contour, coarse_contour_in, normed_init_offset, normed_global_offset, strides =\
             self(x, gt_centers, gt_whs, img_h, img_w, inds)
         normed_init_offset_target, normed_global_offset_target = self.get_targets(gt_contours, gt_centers, gt_whs,
-                                                                                  contour_proposals, strides,
+                                                                                  coarse_contour_in, strides,
                                                                                   is_single_component)
         losses = self.loss(normed_init_offset, normed_global_offset,
                            normed_init_offset_target, normed_global_offset_target,
@@ -602,7 +604,7 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
         pred_centers = (pred_bboxes[..., :2] + pred_bboxes[..., 2:4]) / 2.
         pred_whs = (pred_bboxes[..., 2:4] - pred_bboxes[..., :2]) / 2.
 
-        contour_proposals, coarse_contour, normed_init_offset, normed_global_offset, strides =\
+        contour_proposals, coarse_contour, coarse_contour_in, normed_init_offset, normed_global_offset, strides =\
             self(feats, pred_centers, pred_whs, img_h, img_w, inds)
         return coarse_contour, inds
 
@@ -764,7 +766,11 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             is_single_component = is_single_component.to(torch.bool)
         output_contours, normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
-        for i in range(len(normed_offsets) - 1):
+        if self.loss_last_evolve is None:
+            need_targets = len(normed_offsets)
+        else:
+            need_targets = len(normed_offsets) - 1
+        for i in range(need_targets):
             normed_offset_target = self.get_targets(pys_in[i], gt_contours, is_single_component)
             normed_offsets_targets.append(normed_offset_target)
         if self.loss_last_evolve is None:
