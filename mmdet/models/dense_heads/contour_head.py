@@ -108,7 +108,7 @@ class PointResampler:
             sampled_idxs = self.get_sampled_idxs(cum_lengths, circumference, sampled_num // self.align_num)
             index_0 = torch.arange(0, interpolated_polys.size(0)).unsqueeze(1).repeat(1, sampled_idxs.size(1))
             sampled_polys = interpolated_polys[index_0, sampled_idxs, :]
-            sampled_polys = sampled_polys.reshape(n_instance, points_num, 2)
+            sampled_polys = sampled_polys.reshape(n_instance, sampled_num, 2)
             return sampled_polys.detach()
         else:
             temp = polys[:, :1, :]
@@ -511,11 +511,11 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
             gt_whs = gt_whs[is_single_component]
         gt_centers = gt_centers.unsqueeze(1).repeat(1, self.point_nums[0], 1)
         if self.use_tanh[0]:
-            normed_init_offset_target = (gt_contours - gt_centers) / gt_whs.unsqueeze(1)
+            normed_init_offset_target = (gt_contours[:, ::4, :] - gt_centers) / gt_whs.unsqueeze(1)
         else:
             normed_init_offset_target = (gt_contours - gt_centers) / strides
         if self.use_tanh[1]:
-            normed_global_offset_target = (gt_contours - contour_proposals) / gt_whs.unsqueeze(1)
+            normed_global_offset_target = (gt_contours[:, ::2, :] - self.sampler(contour_proposals)) / gt_whs.unsqueeze(1)
         else:
             normed_global_offset_target = (gt_contours - contour_proposals) / strides
         return normed_init_offset_target.detach(), normed_global_offset_target.detach()
@@ -667,6 +667,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         outputs_contours = [contour_proposals]
         normed_offsets = []
         # evolve contour
+        pys_in = []
         for i in range(self.iter_num):
             py_in = outputs_contours[-1]
             ratio = self.point_nums[i] // py_in.size(1)
@@ -674,6 +675,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                 py_in = self.sampler(py_in, sample_ratio=ratio)
             else:
                 py_in = self.align_sampler(py_in, sample_ratio=ratio)
+            pys_in.append(py_in)
             py_features = get_gcn_feature(x, py_in, inds, img_h, img_w).permute(0, 2, 1)
             evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
             normed_offset = evolve_gcn(py_features).permute(0, 2, 1)
@@ -682,7 +684,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             outputs_contours.append(py_out)
             normed_offsets.append(normed_offset)
         assert len(outputs_contours) == len(normed_offsets) + 1
-        return outputs_contours, normed_offsets
+        return outputs_contours, normed_offsets, pys_in
 
     def loss(self, normed_offsets_preds, normed_offsets_targets, is_single_component=None):
         """Compute losses of the head."""
@@ -760,10 +762,10 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         if is_single_component is not None:
             is_single_component = torch.cat(is_single_component, dim=0)
             is_single_component = is_single_component.to(torch.bool)
-        output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
-        for i in range(len(normed_offsets)):
-            normed_offset_target = self.get_targets(output_contours[i], gt_contours, is_single_component)
+        for i in range(len(normed_offsets) - 1):
+            normed_offset_target = self.get_targets(pys_in[i], gt_contours, is_single_component)
             normed_offsets_targets.append(normed_offset_target)
         if self.loss_last_evolve is None:
             losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
@@ -774,7 +776,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
             losses = self.loss(normed_offsets[:-1], normed_offsets_targets[:-1], is_single_component)
-            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+            losses.update(self.loss_last(pys_in[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
                                          key_points_masks, is_single_component))
             if self.loss_contour_mask is not None:
@@ -805,7 +807,7 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
                 with shape (n, ).
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        output_contours, normed_offsets = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         output_contour = output_contours[ret_stage]
         ret = []
         for i in range(len(img_metas)):
