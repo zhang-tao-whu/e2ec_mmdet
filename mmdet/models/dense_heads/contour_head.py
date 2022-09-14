@@ -924,13 +924,23 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             attentive_features = torch.cat([py_features.permute(0, 2, 1),
                                             deep_features.permute(0, 2, 1), py_out_features], dim=-1)
             attentive = self.attentive_predictor(attentive_features)
-            attentive_normed_offset = normed_offset.detach() * attentive * self.attentive_expand_ratio
+            attentive_normed_offset_loss = normed_offset.detach() * attentive * self.attentive_expand_ratio
+            attentive_normed_offset = normed_offset * attentive * self.attentive_expand_ratio
 
-            py_out_attentive = py_in.detach() + attentive_normed_offset * self.evolve_deform_stride
+
+            if self.norm_type == 'constant':
+                attentive_offset = attentive_normed_offset * self.evolve_deform_stride
+            else:
+                max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+                min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+                wh = max_coords - min_coords
+                attentive_offset = attentive_normed_offset * wh * self.evolve_deform_ratio
+
+            py_out_attentive = py_in.detach() + attentive_offset
 
             outputs_contours.append(py_out_attentive)
             normed_offsets.append(normed_offset)
-            normed_attentive_offsets.append(attentive_normed_offset)
+            normed_attentive_offsets.append(attentive_normed_offset_loss)
         assert len(outputs_contours) == len(normed_offsets) + 1 == len(normed_attentive_offsets) + 1 == len(pys_in) + 1
         return outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
 
