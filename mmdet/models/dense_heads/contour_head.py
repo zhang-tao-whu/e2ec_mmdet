@@ -864,7 +864,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             train_cfg=train_cfg,
             test_cfg=test_cfg)
         self.attentive_expand_ratio = attentive_expand_ratio
-        self.evolve_deform_ratio = evolve_deform_stride
+        self.evolve_deform_ratio = evolve_deform_ratio
         self.add_normed_coords = add_normed_coords
         self.use_tanh = use_tanh
         self.norm_type = norm_type
