@@ -879,7 +879,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
     def _add_pos(self, py_features, py_in):
         min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
         max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
-        rela_coords = (py_features - min_coords) / (max_coords - min_coords)
+        rela_coords = (py_in - min_coords) / (max_coords - min_coords)
         py_features = torch.cat([py_features, rela_coords.permute(0, 2, 1).detach()], dim=1)
         return py_features
 
