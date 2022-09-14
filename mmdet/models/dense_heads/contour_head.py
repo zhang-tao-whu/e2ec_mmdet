@@ -1031,10 +1031,10 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             losses = self.loss(normed_offsets, normed_offsets_targets, is_single_component)
             losses.update(self.loss(attentive_normed_offsets, normed_offsets_targets,
                                     is_single_component, attr='attentive'))
-            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+            losses.update(self.loss_last(pys_in[len(normed_offsets) - 1],
                                          normed_offsets[-1], gt_contours, key_points,
                                          key_points_masks, is_single_component))
-            losses.update(self.loss_last(output_contours[len(normed_offsets) - 1],
+            losses.update(self.loss_last(pys_in[len(normed_offsets) - 1],
                                          attentive_normed_offsets[-1], gt_contours, key_points,
                                          key_points_masks, is_single_component, attr='attentive'))
 
