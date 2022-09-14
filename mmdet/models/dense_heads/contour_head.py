@@ -850,9 +850,9 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                  test_cfg=None,
                  ):
         if add_normed_coords:
-            state_dim = state_dim + 2
+            feature_dim = in_channel + 2
         super(AttentiveContourEvolveHead, self).__init__(
-            in_channel=in_channel,
+            in_channel=feature_dim,
             point_nums=point_nums,
             evolve_deform_stride=evolve_deform_stride,
             iter_num=iter_num,
