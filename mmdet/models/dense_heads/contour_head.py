@@ -851,7 +851,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                  ):
         if add_normed_coords:
             state_dim = state_dim + 2
-        super(BaseContourEvolveHead, self).__init__(
+        super(AttentiveContourEvolveHead, self).__init__(
             in_channel=in_channel,
             point_nums=point_nums,
             evolve_deform_stride=evolve_deform_stride,
