@@ -931,7 +931,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             outputs_contours.append(py_out_attentive)
             normed_offsets.append(normed_offset)
             normed_attentive_offsets.append(attentive_normed_offset)
-        assert len(outputs_contours) == len(normed_offsets) + 1 == len(attentive_normed_offset) + 1 == len(pys_in) + 1
+        assert len(outputs_contours) == len(normed_offsets) + 1 == len(normed_attentive_offsets) + 1 == len(pys_in) + 1
         return outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
 
     def get_targets(self, py_in, gt_contours, is_single_component=None):
