@@ -148,6 +148,16 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         # labels (Tensor): has shape (num_bboxes, )
         bboxes_pred = [item[0] for item in results_list]
         labels_pred = [item[1] for item in results_list]
+        instance_nums = np.sum(np.array([len(item) for item in bboxes_pred]))
+        if instance_nums == 0:
+            mask_pred = [[] for _ in range(self.bbox_head.num_classes)]
+            mask_results = [mask_pred] * len(bboxes_pred)
+            results_list = list(zip(bboxes_pred, labels_pred))
+            bbox_results = [
+                bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
+                for det_bboxes, det_labels in results_list
+            ]
+            return list(zip(bbox_results, mask_results))
         contour_proposals, inds = self.contour_proposal_head.simple_test(feat[self.contour_fpn_start_level:], img_metas, bboxes_pred)
         time_dict['contour_proposal'] = now_time - time.time()
         now_time = time.time()

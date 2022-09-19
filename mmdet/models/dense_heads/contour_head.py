@@ -93,6 +93,8 @@ class PointResampler:
             sampled_num = points_num * self.sample_ratio
         else:
             sampled_num = points_num * sample_ratio
+        if len(polys) == 0:
+            return torch.zeros((0, sampled_num, 2)).to(polys.device)
         interpolated_polys = interpolation(polys, time=self.density)
         n_instance = len(polys)
         if self.mode == 'align_uniform':
@@ -429,7 +431,10 @@ class FPNContourProposalHead(BaseModule, metaclass=ABCMeta):
 
     def forward(self, ms_feats, gt_centers, gt_whs, img_h, img_w, inds):
         num_instances = gt_centers.size(0)
-        gt_max_lengths = torch.max(gt_whs, dim=-1, keepdim=True)[0]
+        if num_instances == 0:
+            gt_max_lengths = gt_whs[..., :1]
+        else:
+            gt_max_lengths = torch.max(gt_whs, dim=-1, keepdim=True)[0]
         regress_ranges = torch.zeros((num_instances, len(self.regress_ranges), 2),
                                      dtype=torch.int64, device=gt_centers.device)
         for i, regress_range in enumerate(self.regress_ranges):
@@ -884,6 +889,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         return py_features
 
     def forward(self, x, contour_proposals, img_h, img_w, inds, use_fpn_level=0):
+        if len(contour_proposals) == 0:
+            return [contour_proposals], [], [], []
         x = x[use_fpn_level]
         outputs_contours = [contour_proposals]
         normed_offsets = []
