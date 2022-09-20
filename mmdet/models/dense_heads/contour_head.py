@@ -721,13 +721,13 @@ class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):
         ret.update({'evolve_loss_last': loss})
         return ret
 
-    def compute_loss_contour_mask(self, polys, gt_masks, gt_bboxes):
+    def compute_loss_contour_mask(self, polys, gt_masks, gt_bboxes, attr=''):
         ret = dict()
         num_mask = torch.tensor(
             len(gt_bboxes), dtype=torch.float, device=gt_bboxes.device)
         num_mask = max(reduce_mean(num_mask), 1.0)
         for i, poly in enumerate(polys):
-            ret.update({'evolve_loss_mask_{}'.format(i): \
+            ret.update({'evolve_loss_mask_{}'.format(i) + attr: \
                         self.loss_contour_mask(poly, gt_masks, gt_bboxes, avg_factor=num_mask)})
         return ret
 
@@ -890,9 +890,10 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
 
     def forward(self, x, contour_proposals, img_h, img_w, inds, use_fpn_level=0):
         if len(contour_proposals) == 0:
-            return [contour_proposals], [], [], []
+            return [contour_proposals], [], [], [], []
         x = x[use_fpn_level]
         outputs_contours = [contour_proposals]
+        outputs_contours_attentive = [contour_proposals]
         normed_offsets = []
         normed_attentive_offsets = []
         pys_in = []
@@ -926,13 +927,14 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                 offset = normed_offset * wh * self.evolve_deform_ratio
 
             py_out = py_in.detach() + offset
+            outputs_contours.append(py_out)
 
             py_out_features = get_gcn_feature(x, py_out, inds, img_h, img_w)
             attentive_features = torch.cat([py_features.permute(0, 2, 1),
                                             deep_features.permute(0, 2, 1), py_out_features], dim=-1)
             attentive = self.attentive_predictor(attentive_features)
             attentive_normed_offset_loss = normed_offset.detach() * attentive * self.attentive_expand_ratio
-            attentive_normed_offset = normed_offset * attentive * self.attentive_expand_ratio
+            attentive_normed_offset = attentive_normed_offset_loss
 
 
             if self.norm_type == 'constant':
@@ -945,11 +947,11 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
 
             py_out_attentive = py_in.detach() + attentive_offset
 
-            outputs_contours.append(py_out_attentive)
+            outputs_contours_attentive.append(py_out_attentive)
             normed_offsets.append(normed_offset)
             normed_attentive_offsets.append(attentive_normed_offset_loss)
         assert len(outputs_contours) == len(normed_offsets) + 1 == len(normed_attentive_offsets) + 1 == len(pys_in) + 1
-        return outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
+        return outputs_contours_attentive, outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
 
     def get_targets(self, py_in, gt_contours, is_single_component=None):
         if is_single_component is not None:
@@ -1026,7 +1028,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         if is_single_component is not None:
             is_single_component = torch.cat(is_single_component, dim=0)
             is_single_component = is_single_component.to(torch.bool)
-        output_contours, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours_attentive, output_contours, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         normed_offsets_targets = []
         if self.loss_last_evolve is None:
             need_targets = len(normed_offsets)
@@ -1042,6 +1044,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             if self.loss_contour_mask is not None:
                 losses.update(self.compute_loss_contour_mask(output_contours[1:],
                                                              gt_masks, gt_bboxes))
+                losses.update(self.compute_loss_contour_mask(output_contours_attentive[1:],
+                                                             gt_masks, gt_bboxes, attr='attentive'))
         else:
             key_points = torch.cat(key_points, dim=0)
             key_points_masks = torch.cat(key_points_masks, dim=0)
@@ -1058,6 +1062,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             if self.loss_contour_mask is not None:
                 losses.update(self.compute_loss_contour_mask(output_contours[1:],
                                                              gt_masks, gt_bboxes))
+                losses.update(self.compute_loss_contour_mask(output_contours_attentive[1:],
+                                                             gt_masks, gt_bboxes, attr='attentive'))
         return losses
 
     def simple_test(self,
@@ -1083,7 +1089,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                 with shape (n, ).
         """
         img_h, img_w = img_metas[0]['batch_input_shape']
-        output_contours, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
+        output_contours, _, normed_offsets, attentive_normed_offsets, pys_in = self(x, contour_proposals, img_h, img_w, inds)
         output_contour = output_contours[ret_stage]
         ret = []
         for i in range(len(img_metas)):
