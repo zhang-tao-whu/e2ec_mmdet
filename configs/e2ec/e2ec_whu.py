@@ -1,4 +1,5 @@
-_base_ = 'e2ec_fcos_center-normbbox-centeronreg-giou_r50_caffe_fpn_gn-head_dcn_feature64_p4init_p4evolve_dml_1x_coco.py'
+_base_ = ['e2ec_fcos_center-normbbox-centeronreg-giou_r50_caffe_fpn_gn-head_dcn_feature64_p4init_p4evolve_dml_1x_coco.py',
+          '../_base_/datasets/whu_contour.py', ]
 
 model = dict(
     bbox_head=dict(num_classes=1,),
