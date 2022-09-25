@@ -84,6 +84,7 @@ data = dict(
     test=dict(pipeline=test_pipeline))
 # optimizer
 optimizer = dict(
+    _delete_=True,
     type='AdamW',
     lr=0.0001,
     weight_decay=0.0001,
