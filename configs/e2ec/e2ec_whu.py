@@ -1,5 +1,4 @@
-_base_ = ['e2ec_fcos_center-normbbox-centeronreg-giou_r50_caffe_fpn_gn-head_dcn_feature64_p4init_p4evolve_dml_1x_coco.py',
-          '../_base_/datasets/whu_contour.py', ]
+_base_ = ['e2ec_fcos_center-normbbox-centeronreg-giou_r50_caffe_fpn_gn-head_dcn_feature64_p4init_p4evolve_dml_1x_coco.py',]
 
 model = dict(
     bbox_head=dict(num_classes=1,),
@@ -44,6 +43,9 @@ model = dict(
 )
 
 # dataset settings
+dataset_type = 'WhuDataset'
+data_root = 'data/whu/'
+classes = ('building')
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -80,9 +82,21 @@ test_pipeline = [
 data = dict(
     samples_per_gpu=2,
     workers_per_gpu=2,
-    train=dict(pipeline=train_pipeline),
-    val=dict(pipeline=test_pipeline),
-    test=dict(pipeline=test_pipeline))
+    train=dict(
+        type=dataset_type,
+        ann_file=data_root + 'annotations/train.json',
+        img_prefix=data_root + 'train/',
+        pipeline=train_pipeline),
+    val=dict(
+        type=dataset_type,
+        ann_file=data_root + 'annotations/train_val.json',
+        img_prefix=data_root + 'train_val/',
+        pipeline=test_pipeline),
+    test=dict(
+        type=dataset_type,
+        ann_file=data_root + 'annotations/val.json',
+        img_prefix=data_root + 'val/',
+        pipeline=test_pipeline))
 # optimizer
 optimizer = dict(
     _delete_=True,
