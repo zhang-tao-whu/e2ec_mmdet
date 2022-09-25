@@ -59,10 +59,11 @@ train_pipeline = [
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
-    dict(type='AlignSampleBoundary', point_nums=128, reset_bbox=True),
+    dict(type='AlignSampleBoundary', point_nums=128, reset_bbox=False, ignore_multi_components_instances=True,
+         gt_masks2bit=True),
     dict(type='ContourDefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels',
-         'gt_masks', 'gt_polys', 'key_points_masks', 'key_points']),
+         'gt_masks', 'gt_polys', 'key_points_masks', 'key_points', 'is_single_component']),
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
