@@ -685,10 +685,10 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         return instance_feat
 
     def extract_features_instance(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
-        rois = torch.cat([cts[..., :1] - whs[..., :1] / 2.,
-                          cts[..., 1:] - whs[..., 1:] / 2.,
-                          cts[..., :1] + whs[..., :1] / 2.,
-                          cts[..., 1:] + whs[..., 1:] / 2.], dim=1)
+        rois = torch.cat([cts[..., :1] - whs[..., :1],
+                          cts[..., 1:] - whs[..., 1:],
+                          cts[..., :1] + whs[..., :1],
+                          cts[..., 1:] + whs[..., 1:]], dim=1)
 
         num_points = cts.size(0)
         ms_rois = []
@@ -730,9 +730,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         iam_feature = iam_map.unsqueeze(2) * instances_features.flatten(2).unsqueeze(1)
         iam_feature = iam_feature.sum(dim=-1)
         shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
-                                                               self.point_nums[0] // self.align_num, 2).tanh() / 2. + 0.5
-        shape_embed = shape_embed.flatten(1, 2) #(n, p, 2)
-
+                                                               self.point_nums[0] // self.align_num, 2).flatten(1, 2)
         if self.use_tanh[0]:
             shape_embed = shape_embed.tanh()
             contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * gt_whs.unsqueeze(1)
