@@ -723,17 +723,13 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
 
         instances_features = self.extract_features_instance(ms_feats, gt_centers, gt_whs,
-                                                            img_h, img_w, inds, ms_inds) # (n, c, 16, 16)
+                                                            img_h, img_w, inds, ms_inds) # (n, c, r, r)
         iam_map = self.iam_predictor(instances_features)
         iam_map = iam_map.flatten(2).softmax(-1)
         iam_feature = iam_map.unsqueeze(2) * instances_features.flatten(2).unsqueeze(1)
         iam_feature = iam_feature.sum(dim=-1)
         shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
                                                                self.point_nums[0] // self.align_num, 2).flatten(1, 2)
-
-        # centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
-        #                                          img_h, img_w, inds, ms_inds).squeeze(1)
-        # shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums[0], 2)
 
         if self.use_tanh[0]:
             shape_embed = shape_embed.tanh()

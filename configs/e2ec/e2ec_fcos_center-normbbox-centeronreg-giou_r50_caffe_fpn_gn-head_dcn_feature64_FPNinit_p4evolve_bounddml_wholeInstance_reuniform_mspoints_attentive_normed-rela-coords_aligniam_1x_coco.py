@@ -11,7 +11,7 @@ model = dict(
             roi_layer=dict(type='RoIAlign', output_size=(8, 8), sampling_ratio=0),
             out_channels=64,
             featmap_strides=[4]),
-        align_num=1,
+        align_num=4,
         point_nums=[32, 64],
         loss_contour_mask=dict(
             type='MaskRasterizationLoss',
