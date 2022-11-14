@@ -679,12 +679,12 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
                                             nn.ReLU(inplace=True),
                                             nn.Linear(hidden_dim, self.point_nums[0] * 2 // align_num, bias=False))
-    def extract_features_single(self, feat, rois, extractor, inds):
+    def extract_features_instance_single(self, feat, rois, extractor, inds):
         rois = torch.cat([inds[:, None].float(), rois], dim=1)
         instance_feat = extractor([feat], rois)
         return instance_feat
 
-    def extract_features(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
+    def extract_features_instance(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
         rois = torch.cat([cts[..., :1] - whs[..., :1] / 2.,
                           cts[..., 1:] - whs[..., 1:] / 2.,
                           cts[..., :1] + whs[..., :1] / 2.,
@@ -698,7 +698,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
             ms_img_inds.append(img_inds[fl_inds == i])
         instance_features = torch.zeros([num_points, ms_feats[0].size(1), self.roi_wh[0],
                                          self.roi_wh[1]]).to(ms_feats[0].device)
-        ms_instances_features = multi_apply(self.extract_features_single, ms_feats, ms_rois, self.roi_extractors,
+        ms_instances_features = multi_apply(self.extract_features_instance_single, ms_feats, ms_rois, self.roi_extractors,
                                          ms_img_inds)
         for i in range(len(ms_feats)):
             instance_features[fl_inds == i] = ms_instances_features[i]
@@ -722,8 +722,8 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         ms_inds = torch.sum(ms_inds, dim=1)
         strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
 
-        instances_features = self.extract_features(ms_feats, gt_centers, gt_whs,
-                                                   img_h, img_w, inds, fl_inds=ms_inds) # (n, c, 16, 16)
+        instances_features = self.extract_features_instance(ms_feats, gt_centers, gt_whs,
+                                                            img_h, img_w, inds, ms_inds) # (n, c, 16, 16)
 
         iam_map = self.iam_predictor(instances_features)
         iam_map = iam_map.flatten(2).softmax(-1)
