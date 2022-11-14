@@ -731,7 +731,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         iam_feature = iam_feature.sum(dim=-1)
         # shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
         #                                                        self.point_nums[0] // self.align_num, 2).flatten(1, 2)
-        shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.point_nums[0], 2).flatten(1, 2)
+        shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.point_nums[0], 2)
 
         if self.use_tanh[0]:
             shape_embed = shape_embed.tanh()
