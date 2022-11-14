@@ -660,103 +660,100 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
                                                         init_cfg=init_cfg,
                                                         train_cfg=train_cfg,
                                                         test_cfg=test_cfg, **kwargs)
-    #     self.align_num = align_num
-    #     self.roi_extractors = []
-    #     self.roi_wh = roi_extractor.roi_layer.output_size
-    #     for stride in strides:
-    #         roi_extractor_ = copy.deepcopy(roi_extractor)
-    #         roi_extractor_.featmap_strides = [stride]
-    #         self.roi_extractors.append(build_roi_extractor(roi_extractor_))
-    #     #init component
-    #     if self.align_num == -1:
-    #         self.align_num = 1
-    #     self.iam_predictor = nn.Sequential(nn.Conv2d(in_channel, hidden_dim, kernel_size=3,
-    #                                                  stride=1, bias=True, padding=1),
-    #                                        nn.ReLU(inplace=True),
-    #                                        nn.Conv2d(hidden_dim, self.align_num, kernel_size=1,
-    #                                                  stride=1, bias=True),
-    #                                        )
-    #     # self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
-    #     #                                     nn.ReLU(inplace=True),
-    #     #                                     nn.Linear(hidden_dim, self.point_nums[0] * 2 // align_num, bias=False))
-    #     self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
-    #                                         nn.ReLU(inplace=True),
-    #                                         nn.Linear(hidden_dim, self.point_nums[0] * 2, bias=False))
-    # def extract_features_instance_single(self, feat, rois, extractor, inds):
-    #     rois = torch.cat([inds[:, None].float(), rois], dim=1)
-    #     instance_feat = extractor([feat], rois)
-    #     return instance_feat
-    #
-    # def extract_features_instance(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
-    #     rois = torch.cat([cts[..., :1] - whs[..., :1],
-    #                       cts[..., 1:] - whs[..., 1:],
-    #                       cts[..., :1] + whs[..., :1],
-    #                       cts[..., 1:] + whs[..., 1:]], dim=1)
-    #
-    #     num_points = cts.size(0)
-    #     ms_rois = []
-    #     ms_img_inds = []
-    #     for i in range(len(ms_feats)):
-    #         ms_rois.append(rois[fl_inds == i])
-    #         ms_img_inds.append(img_inds[fl_inds == i])
-    #     instance_features = torch.zeros([num_points, ms_feats[0].size(1), self.roi_wh[0],
-    #                                      self.roi_wh[1]]).to(ms_feats[0].device)
-    #     ms_instances_features = multi_apply(self.extract_features_instance_single, ms_feats, ms_rois, self.roi_extractors,
-    #                                         ms_img_inds)
-    #     for i in range(len(ms_feats)):
-    #         instance_features[fl_inds == i] = ms_instances_features[i]
-    #     return instance_features
-    #
-    # def forward(self, ms_feats, gt_centers, gt_whs, img_h, img_w, inds):
-    #     num_instances = gt_centers.size(0)
-    #     if num_instances == 0:
-    #         gt_max_lengths = gt_whs[..., :1]
-    #     else:
-    #         gt_max_lengths = torch.max(gt_whs, dim=-1, keepdim=True)[0]
-    #     regress_ranges = torch.zeros((num_instances, len(self.regress_ranges), 2),
-    #                                  dtype=torch.int64, device=gt_centers.device)
-    #     for i, regress_range in enumerate(self.regress_ranges):
-    #         regress_ranges[:, i, 0] = regress_range[0]
-    #         regress_ranges[:, i, 1] = regress_range[1]
-    #     ms_inds = torch.arange(0, len(ms_feats), device=gt_centers.device,
-    #                            dtype=torch.int64).unsqueeze(0)
-    #     ms_inds = torch.logical_and(regress_ranges[..., 0] < gt_max_lengths,
-    #                                 regress_ranges[..., 1] >= gt_max_lengths).to(torch.int64) * ms_inds
-    #     ms_inds = torch.sum(ms_inds, dim=1)
-    #     strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
-    #
-    #     # instances_features = self.extract_features_instance(ms_feats, gt_centers, gt_whs,
-    #     #                                                     img_h, img_w, inds, ms_inds) # (n, c, 16, 16)
-    #     # iam_map = self.iam_predictor(instances_features)
-    #     # iam_map = iam_map.flatten(2).softmax(-1)
-    #     # iam_feature = iam_map.unsqueeze(2) * instances_features.flatten(2).unsqueeze(1)
-    #     # iam_feature = iam_feature.sum(dim=-1)
-    #     # shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
-    #     #                                                        self.point_nums[0] // self.align_num, 2).flatten(1, 2)
-    #
-    #     centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
-    #                                              img_h, img_w, inds, ms_inds).squeeze(1)
-    #     shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums[0], 2)
-    #
-    #     if self.use_tanh[0]:
-    #         shape_embed = shape_embed.tanh()
-    #         contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * gt_whs.unsqueeze(1)
-    #     else:
-    #         contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * strides
-    #     contours_proposal_ret = contours_proposal
-    #
-    #     contours_proposal = self.sampler(contours_proposal)
-    #     contour_proposals_with_center = torch.cat([contours_proposal, gt_centers.unsqueeze(1)], dim=1)
-    #     contour_proposals_with_center_features = self.extract_features(ms_feats, contour_proposals_with_center,
-    #                                                                    img_h, img_w, inds, ms_inds)
-    #     normed_coarse_offsets = self.global_offset_predictor(contour_proposals_with_center_features.flatten(1))
-    #     normed_coarse_offsets = normed_coarse_offsets.reshape(num_instances, self.point_nums[1], 2)
-    #     if self.use_tanh[1]:
-    #         normed_coarse_offsets = normed_coarse_offsets.tanh()
-    #         coarse_contours = contours_proposal.detach() + normed_coarse_offsets * gt_whs.unsqueeze(1)
-    #     else:
-    #         coarse_contours = contours_proposal.detach() + normed_coarse_offsets * strides
-    #     return contours_proposal_ret, coarse_contours, contours_proposal, shape_embed, normed_coarse_offsets, strides
+        self.align_num = align_num
+        self.roi_extractors = []
+        self.roi_wh = roi_extractor.roi_layer.output_size
+        for stride in strides:
+            roi_extractor_ = copy.deepcopy(roi_extractor)
+            roi_extractor_.featmap_strides = [stride]
+            self.roi_extractors.append(build_roi_extractor(roi_extractor_))
+        #init component
+        if self.align_num == -1:
+            self.align_num = 1
+        self.iam_predictor = nn.Sequential(nn.Conv2d(in_channel, hidden_dim, kernel_size=3,
+                                                     stride=1, bias=True, padding=1),
+                                           nn.ReLU(inplace=True),
+                                           nn.Conv2d(hidden_dim, self.align_num, kernel_size=1,
+                                                     stride=1, bias=True),
+                                           )
+        self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
+                                            nn.ReLU(inplace=True),
+                                            nn.Linear(hidden_dim, self.point_nums[0] * 2 // align_num, bias=False))
+    def extract_features_instance_single(self, feat, rois, extractor, inds):
+        rois = torch.cat([inds[:, None].float(), rois], dim=1)
+        instance_feat = extractor([feat], rois)
+        return instance_feat
+
+    def extract_features_instance(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
+        rois = torch.cat([cts[..., :1] - whs[..., :1],
+                          cts[..., 1:] - whs[..., 1:],
+                          cts[..., :1] + whs[..., :1],
+                          cts[..., 1:] + whs[..., 1:]], dim=1)
+
+        num_points = cts.size(0)
+        ms_rois = []
+        ms_img_inds = []
+        for i in range(len(ms_feats)):
+            ms_rois.append(rois[fl_inds == i])
+            ms_img_inds.append(img_inds[fl_inds == i])
+        instance_features = torch.zeros([num_points, ms_feats[0].size(1), self.roi_wh[0],
+                                         self.roi_wh[1]]).to(ms_feats[0].device)
+        ms_instances_features = multi_apply(self.extract_features_instance_single, ms_feats, ms_rois, self.roi_extractors,
+                                            ms_img_inds)
+        for i in range(len(ms_feats)):
+            instance_features[fl_inds == i] = ms_instances_features[i]
+        return instance_features
+
+    def forward(self, ms_feats, gt_centers, gt_whs, img_h, img_w, inds):
+        num_instances = gt_centers.size(0)
+        if num_instances == 0:
+            gt_max_lengths = gt_whs[..., :1]
+        else:
+            gt_max_lengths = torch.max(gt_whs, dim=-1, keepdim=True)[0]
+        regress_ranges = torch.zeros((num_instances, len(self.regress_ranges), 2),
+                                     dtype=torch.int64, device=gt_centers.device)
+        for i, regress_range in enumerate(self.regress_ranges):
+            regress_ranges[:, i, 0] = regress_range[0]
+            regress_ranges[:, i, 1] = regress_range[1]
+        ms_inds = torch.arange(0, len(ms_feats), device=gt_centers.device,
+                               dtype=torch.int64).unsqueeze(0)
+        ms_inds = torch.logical_and(regress_ranges[..., 0] < gt_max_lengths,
+                                    regress_ranges[..., 1] >= gt_max_lengths).to(torch.int64) * ms_inds
+        ms_inds = torch.sum(ms_inds, dim=1)
+        strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
+
+        instances_features = self.extract_features_instance(ms_feats, gt_centers, gt_whs,
+                                                            img_h, img_w, inds, ms_inds) # (n, c, 16, 16)
+        iam_map = self.iam_predictor(instances_features)
+        iam_map = iam_map.flatten(2).softmax(-1)
+        iam_feature = iam_map.unsqueeze(2) * instances_features.flatten(2).unsqueeze(1)
+        iam_feature = iam_feature.sum(dim=-1)
+        shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
+                                                               self.point_nums[0] // self.align_num, 2).flatten(1, 2)
+
+        # centers_features = self.extract_features(ms_feats, gt_centers.unsqueeze(1),
+        #                                          img_h, img_w, inds, ms_inds).squeeze(1)
+        # shape_embed = self.init_predictor(centers_features).reshape(num_instances, self.point_nums[0], 2)
+
+        if self.use_tanh[0]:
+            shape_embed = shape_embed.tanh()
+            contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * gt_whs.unsqueeze(1)
+        else:
+            contours_proposal = gt_centers.detach().unsqueeze(1) + shape_embed * strides
+        contours_proposal_ret = contours_proposal
+
+        contours_proposal = self.sampler(contours_proposal)
+        contour_proposals_with_center = torch.cat([contours_proposal, gt_centers.unsqueeze(1)], dim=1)
+        contour_proposals_with_center_features = self.extract_features(ms_feats, contour_proposals_with_center,
+                                                                       img_h, img_w, inds, ms_inds)
+        normed_coarse_offsets = self.global_offset_predictor(contour_proposals_with_center_features.flatten(1))
+        normed_coarse_offsets = normed_coarse_offsets.reshape(num_instances, self.point_nums[1], 2)
+        if self.use_tanh[1]:
+            normed_coarse_offsets = normed_coarse_offsets.tanh()
+            coarse_contours = contours_proposal.detach() + normed_coarse_offsets * gt_whs.unsqueeze(1)
+        else:
+            coarse_contours = contours_proposal.detach() + normed_coarse_offsets * strides
+        return contours_proposal_ret, coarse_contours, contours_proposal, shape_embed, normed_coarse_offsets, strides
 
 @HEADS.register_module()
 class BaseContourEvolveHead(BaseModule, metaclass=ABCMeta):

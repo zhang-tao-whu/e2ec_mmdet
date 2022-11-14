@@ -8,10 +8,10 @@ model = dict(
         hidden_dim=256,
         roi_extractor=dict(
             type='SingleRoIExtractor',
-            roi_layer=dict(type='RoIAlign', output_size=(16, 16), sampling_ratio=0),
+            roi_layer=dict(type='RoIAlign', output_size=(8, 8), sampling_ratio=0),
             out_channels=64,
             featmap_strides=[4]),
-        align_num=4,
+        align_num=1,
         point_nums=[32, 64],
         loss_contour_mask=dict(
             type='MaskRasterizationLoss',
@@ -82,8 +82,8 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=2,
+    samples_per_gpu=8,
+    workers_per_gpu=8,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
     test=dict(pipeline=test_pipeline))
