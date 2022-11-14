@@ -934,7 +934,7 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                                             deep_features.permute(0, 2, 1), py_out_features], dim=-1)
             attentive = self.attentive_predictor(attentive_features)
             attentive_normed_offset_loss = normed_offset.detach() * attentive * self.attentive_expand_ratio
-            attentive_normed_offset = attentive_normed_offset_loss
+            attentive_normed_offset = normed_offset * attentive * self.attentive_expand_ratio
 
 
             if self.norm_type == 'constant':
@@ -1042,8 +1042,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
             losses.update(self.loss(attentive_normed_offsets, normed_offsets_targets,
                                     is_single_component, attr='attentive'))
             if self.loss_contour_mask is not None:
-                losses.update(self.compute_loss_contour_mask(output_contours[1:],
-                                                             gt_masks, gt_bboxes))
+                #losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                #                                             gt_masks, gt_bboxes))
                 losses.update(self.compute_loss_contour_mask(output_contours_attentive[1:],
                                                              gt_masks, gt_bboxes, attr='attentive'))
         else:
@@ -1060,8 +1060,8 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
                                          key_points_masks, is_single_component, attr='attentive'))
 
             if self.loss_contour_mask is not None:
-                losses.update(self.compute_loss_contour_mask(output_contours[1:],
-                                                             gt_masks, gt_bboxes))
+                #losses.update(self.compute_loss_contour_mask(output_contours[1:],
+                #                                             gt_masks, gt_bboxes))
                 losses.update(self.compute_loss_contour_mask(output_contours_attentive[1:],
                                                              gt_masks, gt_bboxes, attr='attentive'))
         return losses
