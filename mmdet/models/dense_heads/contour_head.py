@@ -666,7 +666,6 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         for stride in strides:
             roi_extractor_ = copy.deepcopy(roi_extractor)
             roi_extractor_.featmap_strides = [stride]
-            print(roi_extractor_)
             self.roi_extractors.append(build_roi_extractor(roi_extractor_))
         #init component
         if self.align_num == -1:
@@ -686,10 +685,10 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         return instance_feat
 
     def extract_features_instance(self, ms_feats, cts, whs, img_h, img_w, img_inds, fl_inds):
-        rois = torch.cat([cts[..., :1] - whs[..., :1],
-                          cts[..., 1:] - whs[..., 1:],
-                          cts[..., :1] + whs[..., :1],
-                          cts[..., 1:] + whs[..., 1:]], dim=1)
+        rois = torch.cat([cts[..., :1] - whs[..., :1] * 0.1,
+                          cts[..., 1:] - whs[..., 1:] * 0.1,
+                          cts[..., :1] + whs[..., :1] * 0.1,
+                          cts[..., 1:] + whs[..., 1:] * 0.1], dim=1)
 
         num_points = cts.size(0)
         ms_rois = []
