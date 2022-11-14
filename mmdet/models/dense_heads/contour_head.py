@@ -647,8 +647,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
                  train_cfg=None,
                  test_cfg=None,
                  **kwargs):
-        super(IamFPNContourProposalHead, self).__init__(self,
-                                                        in_channel=in_channel,
+        super(IamFPNContourProposalHead, self).__init__(in_channel=in_channel,
                                                         hidden_dim=hidden_dim,
                                                         start_level=start_level,
                                                         regress_ranges=regress_ranges,
