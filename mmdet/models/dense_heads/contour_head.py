@@ -696,10 +696,11 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         for i in range(len(ms_feats)):
             ms_rois.append(rois[fl_inds == i])
             ms_img_inds.append(img_inds[fl_inds == i])
+        print(feat.size() for feat in ms_feats)
         instance_features = torch.zeros([num_points, ms_feats[0].size(1), self.roi_wh[0],
                                          self.roi_wh[1]]).to(ms_feats[0].device)
         ms_instances_features = multi_apply(self.extract_features_instance_single, ms_feats, ms_rois, self.roi_extractors,
-                                         ms_img_inds)
+                                            ms_img_inds)
         for i in range(len(ms_feats)):
             instance_features[fl_inds == i] = ms_instances_features[i]
         return instance_features
