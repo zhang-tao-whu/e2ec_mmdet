@@ -729,9 +729,9 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         iam_map = iam_map.flatten(2).softmax(-1)
         iam_feature = iam_map.unsqueeze(2) * instances_features.flatten(2).unsqueeze(1)
         iam_feature = iam_feature.sum(dim=-1)
-        # shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
-        #                                                        self.point_nums[0] // self.align_num, 2).flatten(1, 2)
-        shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.point_nums[0], 2)
+        shape_embed = self.init_predictor(iam_feature).reshape(num_instances, self.align_num,
+                                                               self.point_nums[0] // self.align_num,
+                                                               2).flatten(1, 2)
 
         if self.use_tanh[0]:
             shape_embed = shape_embed.tanh()
