@@ -723,7 +723,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
         strides = torch.Tensor(self.strides).to(gt_centers.device)[ms_inds]
 
         instances_features = self.extract_features(ms_feats, gt_centers, gt_whs,
-                                                   img_h, img_w, inds, ms_inds) # (n, c, 16, 16)
+                                                   img_h, img_w, inds, fl_inds=ms_inds) # (n, c, 16, 16)
 
         iam_map = self.iam_predictor(instances_features)
         iam_map = iam_map.flatten(2).softmax(-1)
