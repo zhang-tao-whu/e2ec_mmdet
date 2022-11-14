@@ -59,6 +59,7 @@ class ContourBasedInstanceSegmentor(SingleStageDetector):
         contour_proposal_head.update(test_cfg=test_cfg)
         contour_evolve_head.update(train_cfg=train_cfg)
         contour_evolve_head.update(test_cfg=test_cfg)
+        print(contour_proposal_head)
         self.contour_proposal_head = build_head(contour_proposal_head)
         self.contour_evolve_head = build_head(contour_evolve_head)
         self.detector_fpn_start_level = detector_fpn_start_level

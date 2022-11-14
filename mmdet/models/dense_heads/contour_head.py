@@ -660,7 +660,7 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
                                                         loss_contour_mask=loss_contour_mask,
                                                         init_cfg=init_cfg,
                                                         train_cfg=train_cfg,
-                                                        test_cfg=test_cfg)
+                                                        test_cfg=test_cfg, **kwargs)
         self.align_num = align_num
         self.roi_extractors = []
         self.roi_wh = roi_extractor.roi_layer.output_size
