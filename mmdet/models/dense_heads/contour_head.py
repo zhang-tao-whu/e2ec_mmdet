@@ -676,9 +676,12 @@ class IamFPNContourProposalHead(FPNContourProposalHead):
                                            nn.Conv2d(hidden_dim, self.align_num, kernel_size=1,
                                                      stride=1, bias=True),
                                            )
+        # self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
+        #                                     nn.ReLU(inplace=True),
+        #                                     nn.Linear(hidden_dim, self.point_nums[0] * 2 // align_num, bias=False))
         self.init_predictor = nn.Sequential(nn.Linear(in_channel, hidden_dim, bias=True),
                                             nn.ReLU(inplace=True),
-                                            nn.Linear(hidden_dim, self.point_nums[0] * 2 // align_num, bias=False))
+                                            nn.Linear(hidden_dim, self.point_nums[0] * 2, bias=False))
     def extract_features_instance_single(self, feat, rois, extractor, inds):
         rois = torch.cat([inds[:, None].float(), rois], dim=1)
         instance_feat = extractor([feat], rois)
