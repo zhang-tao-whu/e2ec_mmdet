@@ -1337,7 +1337,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
 
             memory_list.append(feat) # (bhw, 1, c)
             level_positional_encoding_list.append(level_pos_embed) # (bhw, 1, c)
-            spatial_shapes.append(feat.shape[-2:]) #(2, )
+            spatial_shapes.append([h, w]) #(2, )
 
         memory = torch.cat(memory_list, dim=0) # cat all levels feat on dim 0
         level_positional_encodings = torch.cat(level_positional_encoding_list, dim=0)
