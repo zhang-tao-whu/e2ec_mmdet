@@ -1349,11 +1349,9 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
         # shape (0, h_0*w_0, h_0*w_0+h_1*w_1, ...)
         level_start_index = torch.cat((spatial_shapes.new_zeros(
             (1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
-        print(spatial_shapes)
         return memory, level_positional_encodings, spatial_shapes, level_start_index
 
     def forward(self, x, contour_proposals, img_h, img_w, inds):
-        print([item.shape for item in x])
         if len(contour_proposals) == 0:
             return [contour_proposals], [], [], [], []
         outputs_contours = [contour_proposals]
@@ -1403,7 +1401,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
             outputs_contours.append(py_out)
 
             py_out_features = get_gcn_feature(x[0], py_out, inds, img_h, img_w)
-            attentive_features = torch.cat([py_features.permute(0, 2, 1),
+            attentive_features = torch.cat([py_features,
                                             deep_features.permute(0, 2, 1), py_out_features], dim=-1)
             attentive = self.attentive_predictor(attentive_features)
             attentive_normed_offset_loss = normed_offset.detach() * attentive * self.attentive_expand_ratio
