@@ -41,7 +41,7 @@ from .yolact_head import YOLACTHead, YOLACTProtonet, YOLACTSegmHead
 from .yolo_head import YOLOV3Head
 from .yolof_head import YOLOFHead
 from .yolox_head import YOLOXHead
-from .contour_head import BaseContourProposalHead, BaseContourEvolveHead, FPNContourProposalHead, AttentiveContourEvolveHead, IamFPNContourProposalHead
+from .contour_head import BaseContourProposalHead, BaseContourEvolveHead, FPNContourProposalHead, AttentiveContourEvolveHead, IamFPNContourProposalHead, DeformAttentiveContourEvolveHead
 
 __all__ = [
     'AnchorFreeHead', 'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption',
@@ -57,5 +57,5 @@ __all__ = [
     'DecoupledSOLOLightHead', 'LADHead', 'TOODHead', 'MaskFormerHead',
     'Mask2FormerHead', 'SOLOV2Head', 'DDODHead', 'BaseContourProposalHead',
     'BaseContourEvolveHead', 'FPNContourProposalHead', 'AttentiveContourEvolveHead',
-    'IamFPNContourProposalHead',
+    'IamFPNContourProposalHead', 'DeformAttentiveContourEvolveHead',
 ]
