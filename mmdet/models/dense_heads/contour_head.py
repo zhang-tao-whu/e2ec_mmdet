@@ -1372,7 +1372,8 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
             pys_in.append(py_in)
             py_features = get_gcn_feature(x[0], py_in, inds, img_h, img_w) # (n, 128, c)
             query = py_features.flatten(0, 1).unsqueeze(1) # (n*128, 1, c)
-            reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, len(x), x[0].shape[0]) #(1, n*128, nl, 2)
+            reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, self.cross_attn_feats_num,
+                                                                  x[0].shape[0]) #(1, n*128, nl, 2)
             cross_attn = self.__getattr__('cross_attn' + str(i))
             query = cross_attn(query=query, value=memory+memory_pos_embed, reference_points=reference_points,
                                spatial_shapes=spatial_shapes, level_start_index=level_start_index)
