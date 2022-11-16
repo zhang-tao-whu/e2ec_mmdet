@@ -1341,7 +1341,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
 
         memory = torch.cat(memory_list, dim=0) # cat all levels feat on dim 0
         level_positional_encodings = torch.cat(level_positional_encoding_list, dim=0)
-        device = encoder_inputs.device
+        device = memory.device
         # shape (num_encoder_levels, 2), from low
         # resolution to high resolution
         spatial_shapes = torch.as_tensor(
