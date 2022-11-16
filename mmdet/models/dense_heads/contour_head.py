@@ -1293,7 +1293,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
             self.__setattr__('cross_attn' + str(i), cross_attn)
         self.postional_encoding = build_positional_encoding(positional_encoding)
         self.cross_attn_feats_num = cross_attn_feats_num
-        self.level_encoding = nn.Embedding(self.cross_attn_feats_num, feat_channels)
+        self.level_encoding = nn.Embedding(self.cross_attn_feats_num, in_channel)
 
     def get_reference_points_from_pys(self, pys_in, img_inds, img_h, img_w, num_level):
         # convert pys_in from single images coords to concated image coords
