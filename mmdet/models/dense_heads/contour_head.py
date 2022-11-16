@@ -1323,7 +1323,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
 
             # no padding
             padding_mask_resized = feat.new_zeros(
-                (batch_size, ) + [feat.shape[-2] // ori_batch_size, feat.shape[-1]], dtype=torch.bool)
+                (batch_size, ) + (feat.shape[-2] // ori_batch_size, feat.shape[-1]), dtype=torch.bool)
             pos_embed = self.postional_encoding(padding_mask_resized)
             pos_embed = pos_embed.unsuqeeze(2).repeat(1, 1, ori_batch_size, 1, 1).flatten(2, 3)
 
