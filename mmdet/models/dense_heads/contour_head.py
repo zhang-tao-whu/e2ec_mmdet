@@ -1295,13 +1295,13 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
         self.cross_attn_feats_num = cross_attn_feats_num
         self.level_encoding = nn.Embedding(self.cross_attn_feats_num, in_channel)
 
-    def get_reference_points_from_pys(self, pys_in, img_inds, img_h, img_w, num_level):
+    def get_reference_points_from_pys(self, pys_in, img_inds, img_h, img_w, num_level, bs):
         # convert pys_in from single images coords to concated image coords
         per_contour_off = torch.cat([img_inds[:, None] * 0, img_inds[:, None] * img_h], dim=-1)
         pys_in = pys_in + per_contour_off.unsqueeze(1)
         # get reference points
         reference_points = pys_in.flatten(0, 1).unsqueeze(0)  # (1, n*128, 2)
-        factor = pys_in.new_tensor([[[img_w, img_h * ori_batch_size]]])
+        factor = pys_in.new_tensor([[[img_w, img_h * bs]]])
         reference_points = reference_points / factor
         reference_points = reference_points.unsqueeze(2).repeat(1, 1, num_level, 1)  # (1, n*128, n_level, 2)
         return reference_points
@@ -1372,7 +1372,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
             pys_in.append(py_in)
             py_features = get_gcn_feature(x[0], py_in, inds, img_h, img_w) # (n, 128, c)
             query = py_features.flatten(0, 1).unsqueeze(1) # (n*128, 1, c)
-            reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, len(x)) #(1, n*128, nl, 2)
+            reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, len(x), x[0].shape[0]) #(1, n*128, nl, 2)
             cross_attn = self.__getattr__('cross_attn' + str(i))
             query = cross_attn(query=query, value=memory+memory_pos_embed, reference_points=reference_points,
                                spatial_shapes=spatial_shapes, level_start_index=level_start_index)
