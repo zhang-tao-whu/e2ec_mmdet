@@ -1352,6 +1352,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
         return memory, level_positional_encodings, spatial_shapes, level_start_index
 
     def forward(self, x, contour_proposals, img_h, img_w, inds):
+        print([item.shape for item in x])
         if len(contour_proposals) == 0:
             return [contour_proposals], [], [], [], []
         outputs_contours = [contour_proposals]
@@ -1375,14 +1376,9 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
             reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, self.cross_attn_feats_num,
                                                                   x[0].shape[0]) #(1, n*128, nl, 2)
             cross_attn = self.__getattr__('cross_attn' + str(i))
-            print('query_shape:', query.shape)
-            print('memory_shape:', memory.shape)
-            print('reference_shape:', reference_points.shape)
-            print(spatial_shapes)
-            print(level_start_index)
             query = cross_attn(query=query, value=memory+memory_pos_embed, reference_points=reference_points,
                                spatial_shapes=spatial_shapes, level_start_index=level_start_index)
-            query = query.squeeze(1).reshape(**py_features.shape).permute(0, 2, 1) #(n, c, 128)
+            query = query.squeeze(1).reshape(*py_features.shape).permute(0, 2, 1) #(n, c, 128)
             if self.add_normed_coords:
                 py_features_pos = self._add_pos(query, py_in)
             else:
