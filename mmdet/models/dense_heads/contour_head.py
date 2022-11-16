@@ -1306,6 +1306,7 @@ class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
         reference_points = reference_points.unsqueeze(2).repeat(1, 1, num_level, 1)  # (1, n*128, n_level, 2)
         return reference_points
     def prepare_memory(self, feats_):
+        feats_ = feats_[:self.cross_attn_feats_num]
         #flatten feats to a large feat
         ori_batch_size = feats_[0].shape[0]
         feats = []
