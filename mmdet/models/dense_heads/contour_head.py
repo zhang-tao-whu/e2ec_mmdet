@@ -11,6 +11,7 @@ from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
 import torch.nn as nn
 from functools import partial
 import copy
+from mmcv.cnn.bricks.transformer import build_attention, build_positional_encoding
 
 def multi_apply(func, *args, **kwargs):
     """Apply function to a list of arguments.
@@ -1233,6 +1234,193 @@ class AttentiveContourEvolveHead(BaseContourEvolveHead):
         for i in range(len(img_metas)):
             ret.append(output_contour[inds == i])
         return ret
+
+@HEADS.register_module()
+class DeformAttentiveContourEvolveHead(AttentiveContourEvolveHead):
+    """Base class for DenseHeads."""
+
+    def __init__(self,
+                 in_channel=256,
+                 point_nums=128,
+                 state_dim=128,
+                 evolve_deform_stride=4.,
+                 evolve_deform_ratio=1.0,
+                 iter_num=3,
+                 use_tanh=False,
+                 norm_type='constant',
+                 attentive_expand_ratio=1.2,
+                 add_normed_coords=True,
+                 cross_attn_feats_num=4,
+                 positional_encoding=dict(
+                     type='SinePositionalEncoding',
+                     num_feats=128,
+                     normalize=True),
+                 deformable_attn_cfg=dict(
+                     type='MultiScaleDeformableAttention',
+                     num_heads=8,
+                     num_levels=4,
+                     num_points=4,
+                     embed_dims=256,),
+                 loss_contour=dict(
+                     type='SmoothL1Loss',
+                     beta=0.25,
+                     loss_weight=1.0),
+                 loss_contour_mask=None,
+                 loss_last_evolve=None,
+                 init_cfg=None,
+                 train_cfg=None,
+                 test_cfg=None,
+                 ):
+        super(DeformAttentiveContourEvolveHead, self).__init__(
+            in_channel=in_channel,
+            point_nums=point_nums,
+            state_dim=state_dim,
+            evolve_deform_stride=evolve_deform_stride,
+            evolve_deform_ratio=evolve_deform_ratio,
+            iter_num=iter_num,
+            use_tanh=use_tanh,
+            norm_type=norm_type,
+            attentive_expand_ratio=attentive_expand_ratio,
+            add_normed_coords=add_normed_coords,
+            loss_contour=loss_contour,
+            loss_contour_mask=loss_contour_mask,
+            loss_last_evolve=loss_last_evolve,
+            init_cfg=init_cfg,
+            train_cfg=train_cfg,
+            test_cfg=test_cfg)
+        for i in range(iter_num):
+            cross_attn = build_attention(deformable_attn_cfg)
+            self.__setattr__('cross_attn' + str(i), cross_attn)
+        self.postional_encoding = build_positional_encoding(positional_encoding)
+        self.cross_attn_feats_num = cross_attn_feats_num
+        self.level_encoding = nn.Embedding(self.cross_attn_feats_num, feat_channels)
+
+    def get_reference_points_from_pys(self, pys_in, img_inds, img_h, img_w, num_level):
+        # convert pys_in from single images coords to concated image coords
+        per_contour_off = torch.cat([img_inds[:, None] * 0, img_inds[:, None] * img_h], dim=-1)
+        pys_in = pys_in + per_contour_off.unsqueeze(1)
+        # get reference points
+        reference_points = pys_in.flatten(0, 1).unsqueeze(0)  # (1, n*128, 2)
+        factor = pys_in.new_tensor([[[img_w, img_h * ori_batch_size]]])
+        reference_points = reference_points / factor
+        reference_points = reference_points.unsqueeze(2).repeat(1, 1, num_level, 1)  # (1, n*128, n_level, 2)
+        return reference_points
+    def prepare_memory(self, feats_):
+        #flatten feats to a large feat
+        ori_batch_size = feats_[0].shape[0]
+        feats = []
+        for feat in feats_:
+            feat = feat.permute(1, 0, 2, 3).flatten(1, 2).unsqueeze(0) # (1, c, BH, W)
+            feats.append(feat)
+
+        batch_size = feats[0].shape[0]
+        memory_list = []
+        level_positional_encoding_list = []
+        spatial_shapes = []
+        for i in range(len(feats)):
+            feat = feats[i]
+            h, w = feat.shape[-2:]
+
+            # no padding
+            padding_mask_resized = feat.new_zeros(
+                (batch_size, ) + [feat.shape[-2] // ori_batch_size, feat.shape[-1]], dtype=torch.bool)
+            pos_embed = self.postional_encoding(padding_mask_resized)
+            pos_embed = pos_embed.unsuqeeze(2).repeat(1, 1, ori_batch_size, 1, 1).flatten(2, 3)
+
+            level_embed = self.level_encoding.weight[i]
+            level_pos_embed = level_embed.view(1, -1, 1, 1) + pos_embed
+
+            # shape (batch_size, c, h_i, w_i) -> (h_i * w_i, batch_size, c)
+            feat = feat.flatten(2).permute(2, 0, 1)
+            level_pos_embed = level_pos_embed.flatten(2).permute(2, 0, 1)
+
+            memory_list.append(feat) # (bhw, 1, c)
+            level_positional_encoding_list.append(level_pos_embed) # (bhw, 1, c)
+            spatial_shapes.append(feat.shape[-2:]) #(2, )
+
+        memory = torch.cat(memory_list, dim=0) # cat all levels feat on dim 0
+        level_positional_encodings = torch.cat(level_positional_encoding_list, dim=0)
+        device = encoder_inputs.device
+        # shape (num_encoder_levels, 2), from low
+        # resolution to high resolution
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=device)
+        # shape (0, h_0*w_0, h_0*w_0+h_1*w_1, ...)
+        level_start_index = torch.cat((spatial_shapes.new_zeros(
+            (1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        return memory, level_positional_encodings, spatial_shapes, level_start_index
+
+    def forward(self, x, contour_proposals, img_h, img_w, inds):
+        if len(contour_proposals) == 0:
+            return [contour_proposals], [], [], [], []
+        outputs_contours = [contour_proposals]
+        outputs_contours_attentive = [contour_proposals]
+        normed_offsets = []
+        normed_attentive_offsets = []
+        pys_in = []
+        memory, memory_pos_embed, spatial_shapes, level_start_index = self.prepare_memory(x)
+
+        # evolve contour
+        for i in range(self.iter_num):
+            py_in = outputs_contours[-1]
+            ratio = self.point_nums[i] // py_in.size(1)
+            if i == self.iter_num - 1:
+                py_in = self.sampler(py_in, sample_ratio=ratio)
+            else:
+                py_in = self.align_sampler(py_in, sample_ratio=ratio)
+            pys_in.append(py_in)
+            py_features = get_gcn_feature(x, py_in, inds, img_h, img_w) # (n, 128, c)
+            query = py_features.flatten(0, 1).unsqueeze(1) # (n*128, 1, c)
+            reference_points = self.get_reference_points_from_pys(py_in, inds, img_h, img_w, len(x)) #(1, n*128, nl, 2)
+            cross_attn = self.__getattr__('cross_attn' + str(i))
+            query = cross_attn(query=query, value=memory+memory_pos_embed, reference_points=reference_points,
+                               spatial_shapes=spatial_shapes, level_start_index=level_start_index)
+            query = query.squeeze(1).reshape(**py_features.shape).permute(0, 2, 1) #(n, c, 128)
+            if self.add_normed_coords:
+                py_features_pos = self._add_pos(query, py_in)
+            else:
+                py_features_pos = query
+            evolve_gcn = self.__getattr__('evolve_gcn' + str(i))
+            normed_offset, deep_features = evolve_gcn(py_features_pos, return_feature=True)
+            normed_offset = normed_offset.permute(0, 2, 1)
+
+            if self.use_tanh:
+                normed_offset = normed_offset.tanh()
+
+            if self.norm_type == 'constant':
+                offset = normed_offset * self.evolve_deform_stride
+            else:
+                max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+                min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+                wh = max_coords - min_coords
+                offset = normed_offset * wh * self.evolve_deform_ratio
+
+            py_out = py_in.detach() + offset
+            outputs_contours.append(py_out)
+
+            py_out_features = get_gcn_feature(x, py_out, inds, img_h, img_w)
+            attentive_features = torch.cat([py_features.permute(0, 2, 1),
+                                            deep_features.permute(0, 2, 1), py_out_features], dim=-1)
+            attentive = self.attentive_predictor(attentive_features)
+            attentive_normed_offset_loss = normed_offset.detach() * attentive * self.attentive_expand_ratio
+            attentive_normed_offset = normed_offset * attentive * self.attentive_expand_ratio
+
+
+            if self.norm_type == 'constant':
+                attentive_offset = attentive_normed_offset * self.evolve_deform_stride
+            else:
+                max_coords = torch.max(py_in, dim=1, keepdim=True)[0]
+                min_coords = torch.min(py_in, dim=1, keepdim=True)[0]
+                wh = max_coords - min_coords
+                attentive_offset = attentive_normed_offset * wh * self.evolve_deform_ratio
+
+            py_out_attentive = py_in.detach() + attentive_offset
+
+            outputs_contours_attentive.append(py_out_attentive)
+            normed_offsets.append(normed_offset)
+            normed_attentive_offsets.append(attentive_normed_offset_loss)
+        assert len(outputs_contours) == len(normed_offsets) + 1 == len(normed_attentive_offsets) + 1 == len(pys_in) + 1
+        return outputs_contours_attentive, outputs_contours, normed_offsets, normed_attentive_offsets, pys_in
 
 class CircConv(nn.Module):
     def __init__(self, state_dim, out_state_dim=None, n_adj=4):
